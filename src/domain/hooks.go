@@ -107,9 +107,9 @@ func (r *HookRunner) run(ctx context.Context, step string, phase string, hctx *H
 				continue
 			}
 			r.progress.OnStep(StepEvent{
-				Step:    hookLabel,
-				Status:  StepFailed,
-				Error:   fmt.Errorf("hook '%s' failed: %w", truncate(hook.Run, 40), err),
+				Step:   hookLabel,
+				Status: StepFailed,
+				Error:  fmt.Errorf("hook '%s' failed: %w", truncate(hook.Run, 40), err),
 			})
 			return fmt.Errorf("hook '%s' failed: %w", truncate(hook.Run, 40), err)
 		}

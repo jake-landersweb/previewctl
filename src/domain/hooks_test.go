@@ -239,7 +239,7 @@ func TestHookRunner_ProgressEvents(t *testing.T) {
 	runner := NewHookRunner(hooks, progress)
 	ctx := context.Background()
 
-	runner.RunBefore(ctx, "test_step", &HookContext{})
+	_ = runner.RunBefore(ctx, "test_step", &HookContext{})
 
 	if len(progress.events) != 2 {
 		t.Fatalf("expected 2 progress events (started + completed), got %d", len(progress.events))

@@ -161,7 +161,7 @@ func (a *FileStateAdapter) writeAtomic(state *domain.State) error {
 	}
 
 	if err := os.Rename(tmpFile, a.path); err != nil {
-		os.Remove(tmpFile)
+		_ = os.Remove(tmpFile)
 		return fmt.Errorf("renaming state file: %w", err)
 	}
 

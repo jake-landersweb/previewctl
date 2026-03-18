@@ -44,7 +44,7 @@ func (a *PostgresAdapter) EnsureInfrastructure(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("postgres not reachable on %s:%d: %w", a.host, a.config.Port, err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	return db.PingContext(ctx)
 }
@@ -54,18 +54,18 @@ func (a *PostgresAdapter) SeedTemplate(ctx context.Context, snapshotPath string)
 	if err != nil {
 		return fmt.Errorf("connecting to postgres: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	templateDb := a.config.TemplateDb
 
 	// Unmark template if it exists (ignore errors if db doesn't exist)
-	db.ExecContext(ctx, fmt.Sprintf("ALTER DATABASE %s IS_TEMPLATE = false", quoteIdent(templateDb)))
+	_, _ = db.ExecContext(ctx, fmt.Sprintf("ALTER DATABASE %s IS_TEMPLATE = false", quoteIdent(templateDb)))
 
 	// Terminate connections to template
-	db.ExecContext(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", templateDb)
+	_, _ = db.ExecContext(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", templateDb)
 
 	// Drop existing template
-	db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdent(templateDb)))
+	_, _ = db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdent(templateDb)))
 
 	if snapshotPath != "" {
 		// pg_restore requires CLI tool — only case where we shell out
@@ -96,7 +96,7 @@ func (a *PostgresAdapter) SeedTemplate(ctx context.Context, snapshotPath string)
 			if err != nil {
 				return fmt.Errorf("connecting to template db: %w", err)
 			}
-			defer templateConn.Close()
+			defer func() { _ = templateConn.Close() }()
 			if _, err := templateConn.ExecContext(ctx, string(seedSQL)); err != nil {
 				return fmt.Errorf("running seed script: %w", err)
 			}
@@ -119,7 +119,7 @@ func (a *PostgresAdapter) CreateDatabase(ctx context.Context, envName string) (*
 	if err != nil {
 		return nil, fmt.Errorf("connecting to postgres: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	_, err = db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s",
 		quoteIdent(dbName), quoteIdent(a.config.TemplateDb)))
@@ -145,10 +145,10 @@ func (a *PostgresAdapter) DestroyDatabase(ctx context.Context, envName string) e
 	if err != nil {
 		return fmt.Errorf("connecting to postgres: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Terminate connections
-	db.ExecContext(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", dbName)
+	_, _ = db.ExecContext(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", dbName)
 
 	_, err = db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdent(dbName)))
 	if err != nil {
@@ -172,7 +172,7 @@ func (a *PostgresAdapter) DatabaseExists(ctx context.Context, envName string) (b
 	if err != nil {
 		return false, fmt.Errorf("connecting to postgres: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var exists bool
 	err = db.QueryRowContext(ctx,

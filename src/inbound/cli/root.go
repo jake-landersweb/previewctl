@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -121,7 +122,7 @@ func resolveEnvName(args []string, statePath string) (string, error) {
 	}
 
 	state := filestate.NewFileStateAdapter(statePath)
-	fullState, err := state.Load(nil)
+	fullState, err := state.Load(context.TODO())
 	if err != nil {
 		return "", fmt.Errorf("loading state: %w", err)
 	}
