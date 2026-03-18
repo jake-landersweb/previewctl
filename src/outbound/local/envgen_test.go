@@ -14,8 +14,8 @@ func TestEnvGenAdapter_Generate(t *testing.T) {
 	workdir := t.TempDir()
 
 	// Create service directories
-	os.MkdirAll(filepath.Join(workdir, "apps/backend"), 0o755)
-	os.MkdirAll(filepath.Join(workdir, "apps/web"), 0o755)
+	_ = os.MkdirAll(filepath.Join(workdir, "apps/backend"), 0o755)
+	_ = os.MkdirAll(filepath.Join(workdir, "apps/web"), 0o755)
 
 	cfg := &domain.ProjectConfig{
 		Services: map[string]domain.ServiceConfig{
@@ -86,7 +86,7 @@ func TestEnvGenAdapter_Generate(t *testing.T) {
 
 func TestEnvGenAdapter_Generate_SharedPath(t *testing.T) {
 	workdir := t.TempDir()
-	os.MkdirAll(filepath.Join(workdir, "apps/backend"), 0o755)
+	_ = os.MkdirAll(filepath.Join(workdir, "apps/backend"), 0o755)
 
 	// Two services sharing the same path (like backend + queue in the POC)
 	cfg := &domain.ProjectConfig{
@@ -128,8 +128,8 @@ func TestEnvGenAdapter_Generate_SharedPath(t *testing.T) {
 func TestEnvGenAdapter_Cleanup(t *testing.T) {
 	workdir := t.TempDir()
 	envPath := filepath.Join(workdir, "apps/backend/.env.local")
-	os.MkdirAll(filepath.Dir(envPath), 0o755)
-	os.WriteFile(envPath, []byte("PORT=8042\n"), 0o644)
+	_ = os.MkdirAll(filepath.Dir(envPath), 0o755)
+	_ = os.WriteFile(envPath, []byte("PORT=8042\n"), 0o644)
 
 	cfg := &domain.ProjectConfig{
 		Services: map[string]domain.ServiceConfig{

@@ -14,9 +14,9 @@ import (
 // ComputeAdapter implements domain.ComputePort for local development.
 // It manages git worktrees and per-environment docker compose infrastructure.
 type ComputeAdapter struct {
-	config         *domain.ProjectConfig
-	composeFile    string // path to per-env compose file (e.g., compose.worktree.yaml)
-	worktreeBase   string // base directory for worktrees
+	config       *domain.ProjectConfig
+	composeFile  string // path to per-env compose file (e.g., compose.worktree.yaml)
+	worktreeBase string // base directory for worktrees
 }
 
 // NewComputeAdapter creates a new local compute adapter.
@@ -55,7 +55,7 @@ func (a *ComputeAdapter) Create(ctx context.Context, envName string, branch stri
 	// Update submodules if they exist
 	cmd = exec.CommandContext(ctx, "git", "submodule", "update", "--init", "--recursive")
 	cmd.Dir = worktreePath
-	cmd.CombinedOutput() // ignore errors if no submodules
+	_, _ = cmd.CombinedOutput() // ignore errors if no submodules
 
 	// Install dependencies if package manager is configured
 	if a.config.PackageManager != "" {

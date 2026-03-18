@@ -9,14 +9,14 @@ import (
 
 // ProjectConfig is the top-level previewctl.yaml configuration.
 type ProjectConfig struct {
-	Version        int                          `yaml:"version"`
-	Name           string                       `yaml:"name"`
-	PackageManager string                       `yaml:"packageManager,omitempty"`
-	Core           CoreConfig                   `yaml:"core"`
+	Version        int                           `yaml:"version"`
+	Name           string                        `yaml:"name"`
+	PackageManager string                        `yaml:"packageManager,omitempty"`
+	Core           CoreConfig                    `yaml:"core"`
 	Infrastructure map[string]InfraServiceConfig `yaml:"infrastructure,omitempty"`
-	Services       map[string]ServiceConfig     `yaml:"services"`
-	Local          *LocalConfig                 `yaml:"local,omitempty"`
-	Hooks          HooksConfig                  `yaml:"hooks,omitempty"`
+	Services       map[string]ServiceConfig      `yaml:"services"`
+	Local          *LocalConfig                  `yaml:"local,omitempty"`
+	Hooks          HooksConfig                   `yaml:"hooks,omitempty"`
 }
 
 // CoreConfig holds managed services requiring engine-specific lifecycle.
@@ -67,15 +67,15 @@ type ServiceConfig struct {
 
 // LocalConfig holds local-mode specific configuration.
 type LocalConfig struct {
-	Worktree    WorktreeConfig `yaml:"worktree"`
+	Worktree WorktreeConfig `yaml:"worktree"`
 	// ComposeFile is the path to the docker compose file for per-env infrastructure,
 	// relative to the project root. If empty, no per-env containers are started.
-	ComposeFile string         `yaml:"composeFile,omitempty"`
+	ComposeFile string `yaml:"composeFile,omitempty"`
 }
 
 // WorktreeConfig defines worktree settings.
 type WorktreeConfig struct {
-	BasePath        string   `yaml:"basePath"`
+	BasePath string `yaml:"basePath"`
 	// SymlinkPatterns are glob patterns for gitignored files to symlink from the
 	// main worktree into each new worktree (e.g. ".env" matches .env files recursively).
 	// These are typically secret/config files that exist in the main repo but aren't

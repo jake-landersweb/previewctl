@@ -75,16 +75,16 @@ type EnvironmentEntry struct {
 
 // EnvironmentDetail is an enriched view with live infrastructure checks.
 type EnvironmentDetail struct {
-	Entry          *EnvironmentEntry          `json:"entry"`
-	InfraRunning   bool                       `json:"infraRunning"`
-	DatabaseExists map[string]bool            `json:"databaseExists"`
-	SnapshotInfo   map[string]*SnapshotState  `json:"snapshotInfo"`
+	Entry          *EnvironmentEntry         `json:"entry"`
+	InfraRunning   bool                      `json:"infraRunning"`
+	DatabaseExists map[string]bool           `json:"databaseExists"`
+	SnapshotInfo   map[string]*SnapshotState `json:"snapshotInfo"`
 }
 
 // State is the top-level persisted state.
 type State struct {
-	Version      int                         `json:"version"`
-	Snapshots    map[string]*SnapshotState   `json:"snapshots"`
+	Version      int                          `json:"version"`
+	Snapshots    map[string]*SnapshotState    `json:"snapshots"`
 	Environments map[string]*EnvironmentEntry `json:"environments"`
 }
 
