@@ -1,4 +1,4 @@
-module github.com/jake/previewctl
+module github.com/jake-landersweb/previewctl
 
 go 1.25.0
 

@@ -1,0 +1,11 @@
+{
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "package-name": "previewctl",
+      "versioning": "always-bump-patch",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true
+    }
+  }
+}

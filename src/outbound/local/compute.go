@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jake/previewctl/src/domain"
+	"github.com/jake-landersweb/previewctl/src/domain"
 )
 
 // ComputeAdapter implements domain.ComputePort for local development.

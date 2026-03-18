@@ -12,10 +12,10 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/jake/previewctl/src/domain"
-	"github.com/jake/previewctl/src/outbound/local"
-	filestate "github.com/jake/previewctl/src/outbound/state"
-	"github.com/jake/previewctl/src/testutil"
+	"github.com/jake-landersweb/previewctl/src/domain"
+	"github.com/jake-landersweb/previewctl/src/outbound/local"
+	filestate "github.com/jake-landersweb/previewctl/src/outbound/state"
+	"github.com/jake-landersweb/previewctl/src/testutil"
 )
 
 // stubComputePort is a minimal compute adapter for integration tests.

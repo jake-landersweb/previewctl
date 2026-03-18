@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jake/previewctl/src/domain"
+	"github.com/jake-landersweb/previewctl/src/domain"
 	"github.com/spf13/cobra"
 )
 

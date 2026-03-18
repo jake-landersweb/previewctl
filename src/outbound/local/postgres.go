@@ -10,7 +10,7 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/jake/previewctl/src/domain"
+	"github.com/jake-landersweb/previewctl/src/domain"
 )
 
 // PostgresAdapter implements domain.DatabasePort for local Postgres

@@ -12,8 +12,8 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/jake/previewctl/src/domain"
-	"github.com/jake/previewctl/src/testutil"
+	"github.com/jake-landersweb/previewctl/src/domain"
+	"github.com/jake-landersweb/previewctl/src/testutil"
 )
 
 func newTestPostgresAdapter(t *testing.T, pg *testutil.PostgresContainer) *PostgresAdapter {

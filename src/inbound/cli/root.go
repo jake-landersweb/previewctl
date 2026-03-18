@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jake/previewctl/src/domain"
-	"github.com/jake/previewctl/src/outbound/local"
-	filestate "github.com/jake/previewctl/src/outbound/state"
+	"github.com/jake-landersweb/previewctl/src/domain"
+	"github.com/jake-landersweb/previewctl/src/outbound/local"
+	filestate "github.com/jake-landersweb/previewctl/src/outbound/state"
+	"github.com/jake-landersweb/previewctl/src/version"
 	"github.com/spf13/cobra"
 )
 
@@ -16,8 +17,9 @@ const configFileName = "previewctl.yaml"
 // Execute runs the CLI.
 func Execute() {
 	rootCmd := &cobra.Command{
-		Use:   "previewctl",
-		Short: "Manage isolated preview and development environments",
+		Use:     "previewctl",
+		Short:   "Manage isolated preview and development environments",
+		Version: version.Get(),
 	}
 
 	rootCmd.AddCommand(

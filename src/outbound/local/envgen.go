@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jake/previewctl/src/domain"
+	"github.com/jake-landersweb/previewctl/src/domain"
 )
 
 // EnvGenAdapter implements domain.EnvPort for local development.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jake/previewctl/src/domain"
+	"github.com/jake-landersweb/previewctl/src/domain"
 )
 
 func TestEnvGenAdapter_Generate(t *testing.T) {

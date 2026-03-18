@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jake/previewctl/src/domain"
+	"github.com/jake-landersweb/previewctl/src/domain"
 )
 
 // writeTestComposeFile creates a minimal compose file for testing.

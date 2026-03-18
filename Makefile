@@ -1,7 +1,10 @@
 .PHONY: build test test-integration lint clean
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X github.com/jake-landersweb/previewctl/src/version.Version=$(VERSION)
+
 build:
-	go build -o bin/previewctl ./src/cmd/previewctl
+	go build -ldflags "$(LDFLAGS)" -o bin/previewctl ./src/cmd/previewctl
 
 test:
 	go test ./src/...
