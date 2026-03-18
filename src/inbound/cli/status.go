@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/spf13/cobra"
 )
@@ -33,36 +34,48 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			e := detail.Entry
-			fmt.Printf("\nEnvironment: %s\n", e.Name)
-			fmt.Printf("  Branch:   %s\n", e.Branch)
-			fmt.Printf("  Mode:     %s\n", e.Mode)
-			fmt.Printf("  Status:   %s\n", e.Status)
+
+			Header(fmt.Sprintf("Environment %s", styleDetail.Render(e.Name)))
+
+			KeyValue("Branch", e.Branch)
+			KeyValue("Mode", string(e.Mode))
+			KeyValue("Status", StatusBadge(string(e.Status)))
 
 			if e.Local != nil {
-				fmt.Printf("  Worktree: %s\n", e.Local.WorktreePath)
+				KeyValue("Worktree", e.Local.WorktreePath)
 			}
 
 			infraStatus := "stopped"
 			if detail.InfraRunning {
 				infraStatus = "running"
 			}
-			fmt.Printf("  Infra:    %s\n", infraStatus)
+			KeyValue("Infrastructure", StatusBadge(infraStatus))
 
-			fmt.Println("  Databases:")
+			fmt.Fprintln(os.Stderr)
+			SectionHeader("Databases")
 			for name, exists := range detail.DatabaseExists {
 				status := "missing"
 				if exists {
 					status = "exists"
 				}
 				dbRef := e.Databases[name]
-				fmt.Printf("    %s (%s): %s\n", name, dbRef.Name, status)
+				DetailKeyValue(name, fmt.Sprintf("%s  %s",
+					styleDim.Render(dbRef.Name),
+					StatusBadge(status),
+				))
 			}
 
-			fmt.Println("  Ports:")
-			for svc, port := range e.Ports {
-				fmt.Printf("    %s: %d\n", svc, port)
+			fmt.Fprintln(os.Stderr)
+			SectionHeader("Ports")
+			portNames := make([]string, 0, len(e.Ports))
+			for name := range e.Ports {
+				portNames = append(portNames, name)
 			}
-			fmt.Println()
+			sort.Strings(portNames)
+			for _, name := range portNames {
+				DetailKeyValue(name, fmt.Sprintf("%d", e.Ports[name]))
+			}
+			fmt.Fprintln(os.Stderr)
 
 			return nil
 		},

@@ -40,13 +40,16 @@ func newDbSeedCmd() *cobra.Command {
 				dbName = "main"
 			}
 
-			fmt.Printf("\nSeeding template database '%s'\n\n", dbName)
+			Header(fmt.Sprintf("Seeding template database %s",
+				styleDetail.Render(dbName)))
 
 			if err := mgr.SeedTemplate(cmd.Context(), dbName, snapshotPath); err != nil {
 				return err
 			}
 
-			fmt.Printf("\nTemplate database '%s' seeded successfully.\n\n", dbName)
+			Success(fmt.Sprintf("Template database %s seeded",
+				styleDetail.Render(dbName)))
+
 			return nil
 		},
 	}
@@ -83,13 +86,17 @@ func newDbResetCmd() *cobra.Command {
 				dbName = "main"
 			}
 
-			fmt.Printf("\nResetting database '%s' for environment '%s'\n\n", dbName, envName)
+			Header(fmt.Sprintf("Resetting database %s for %s",
+				styleDetail.Render(dbName),
+				styleDetail.Render(envName)))
 
 			if err := mgr.ResetDatabase(cmd.Context(), envName, dbName); err != nil {
 				return err
 			}
 
-			fmt.Printf("\nDatabase '%s' reset successfully.\n\n", dbName)
+			Success(fmt.Sprintf("Database %s reset",
+				styleDetail.Render(dbName)))
+
 			return nil
 		},
 	}

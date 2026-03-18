@@ -91,9 +91,8 @@ func (a *ComputeAdapter) Stop(ctx context.Context, envName string) error {
 		return nil
 	}
 
-	env := []string{fmt.Sprintf("COMPOSE_PROJECT_NAME=%s-%s", a.config.Name, envName)}
 	cmd := exec.CommandContext(ctx, "docker", "compose", "-f", a.composeFile, "stop")
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = a.composeEnv(envName)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("stopping infrastructure: %s", string(out))
 	}
@@ -104,10 +103,12 @@ func (a *ComputeAdapter) Stop(ctx context.Context, envName string) error {
 func (a *ComputeAdapter) Destroy(ctx context.Context, envName string) error {
 	// Tear down docker compose
 	if a.composeFile != "" {
-		env := []string{fmt.Sprintf("COMPOSE_PROJECT_NAME=%s-%s", a.config.Name, envName)}
 		cmd := exec.CommandContext(ctx, "docker", "compose", "-f", a.composeFile, "down", "-v")
-		cmd.Env = append(os.Environ(), env...)
-		cmd.CombinedOutput() // best effort
+		cmd.Env = a.composeEnv(envName)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// Log but don't fail — worktree removal should still happen
+			_ = out
+		}
 	}
 
 	// Remove worktree
@@ -125,9 +126,8 @@ func (a *ComputeAdapter) IsRunning(ctx context.Context, envName string) (bool, e
 		return false, nil
 	}
 
-	env := []string{fmt.Sprintf("COMPOSE_PROJECT_NAME=%s-%s", a.config.Name, envName)}
 	cmd := exec.CommandContext(ctx, "docker", "compose", "-f", a.composeFile, "ps", "--format", "json")
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = a.composeEnv(envName)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false, nil
@@ -135,6 +135,11 @@ func (a *ComputeAdapter) IsRunning(ctx context.Context, envName string) (bool, e
 
 	// If output is non-empty, containers are running
 	return len(strings.TrimSpace(string(out))) > 0, nil
+}
+
+// composeEnv returns os.Environ() with COMPOSE_PROJECT_NAME set for the given environment.
+func (a *ComputeAdapter) composeEnv(envName string) []string {
+	return append(os.Environ(), fmt.Sprintf("COMPOSE_PROJECT_NAME=%s-%s", a.config.Name, envName))
 }
 
 func (a *ComputeAdapter) buildComposeEnv(envName string, ports domain.PortMap) []string {

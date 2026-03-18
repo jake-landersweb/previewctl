@@ -16,6 +16,7 @@ type ProjectConfig struct {
 	Infrastructure map[string]InfraServiceConfig `yaml:"infrastructure,omitempty"`
 	Services       map[string]ServiceConfig     `yaml:"services"`
 	Local          *LocalConfig                 `yaml:"local,omitempty"`
+	Hooks          HooksConfig                  `yaml:"hooks,omitempty"`
 }
 
 // CoreConfig holds managed services requiring engine-specific lifecycle.
@@ -66,7 +67,10 @@ type ServiceConfig struct {
 
 // LocalConfig holds local-mode specific configuration.
 type LocalConfig struct {
-	Worktree WorktreeConfig `yaml:"worktree"`
+	Worktree    WorktreeConfig `yaml:"worktree"`
+	// ComposeFile is the path to the docker compose file for per-env infrastructure,
+	// relative to the project root. If empty, no per-env containers are started.
+	ComposeFile string         `yaml:"composeFile,omitempty"`
 }
 
 // WorktreeConfig defines worktree settings.

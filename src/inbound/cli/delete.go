@@ -8,10 +8,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newDestroyCmd() *cobra.Command {
+func newDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "destroy [name]",
-		Short: "Tear down an environment",
+		Use:   "delete [name]",
+		Short: "Delete an environment",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			progress := NewCLIProgressReporter()
@@ -28,13 +28,16 @@ func newDestroyCmd() *cobra.Command {
 				return fmt.Errorf("could not determine environment: %w", err)
 			}
 
-			fmt.Printf("\nDestroying environment '%s'\n\n", envName)
+			Header(fmt.Sprintf("Deleting environment %s",
+				styleDetail.Render(envName)))
 
 			if err := mgr.Destroy(cmd.Context(), envName); err != nil {
 				return err
 			}
 
-			fmt.Printf("\nEnvironment '%s' destroyed.\n\n", envName)
+			Success(fmt.Sprintf("Environment %s deleted",
+				styleDetail.Render(envName)))
+
 			return nil
 		},
 	}

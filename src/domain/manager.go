@@ -15,18 +15,20 @@ type Manager struct {
 	envgen     EnvPort
 	state      StatePort
 	progress   ProgressReporter
+	hooks      *HookRunner
 	config     *ProjectConfig
 }
 
 // ManagerDeps holds the dependencies for creating a Manager.
 type ManagerDeps struct {
-	Databases  map[string]DatabasePort
-	Compute    ComputePort
-	Networking NetworkingPort
-	EnvGen     EnvPort
-	State      StatePort
-	Progress   ProgressReporter
-	Config     *ProjectConfig
+	Databases   map[string]DatabasePort
+	Compute     ComputePort
+	Networking  NetworkingPort
+	EnvGen      EnvPort
+	State       StatePort
+	Progress    ProgressReporter
+	Config      *ProjectConfig
+	ProjectRoot string
 }
 
 // NewManager creates a new Manager with the given dependencies.
@@ -42,74 +44,127 @@ func NewManager(deps ManagerDeps) *Manager {
 		envgen:     deps.EnvGen,
 		state:      deps.State,
 		progress:   progress,
+		hooks:      NewHookRunner(deps.Config.Hooks, progress),
 		config:     deps.Config,
 	}
 }
 
+// step executes a lifecycle step with progress reporting and before/after hooks.
+// completeMsg is a pointer so the closure can update it dynamically.
+func (m *Manager) step(ctx context.Context, name string, startMsg string, completeMsg *string, hctx *HookContext, fn func() error) error {
+	// Before hook
+	if err := m.hooks.RunBefore(ctx, name, hctx); err != nil {
+		return err
+	}
+
+	// Execute step
+	m.progress.OnStep(StepEvent{Step: name, Status: StepStarted, Message: startMsg})
+	if err := fn(); err != nil {
+		m.progress.OnStep(StepEvent{Step: name, Status: StepFailed, Error: err})
+		return err
+	}
+	m.progress.OnStep(StepEvent{Step: name, Status: StepCompleted, Message: *completeMsg})
+
+	// After hook
+	if err := m.hooks.RunAfter(ctx, name, hctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// msg is a convenience for creating a string pointer for step().
+func msg(s string) *string { return &s }
+
 // Init creates a new environment end-to-end.
 func (m *Manager) Init(ctx context.Context, envName string, branch string) (*EnvironmentEntry, error) {
+	hctx := &HookContext{
+		EnvName:     envName,
+		Branch:      branch,
+		ProjectName: m.config.Name,
+	}
+
+	// Lifecycle-level before hook
+	if err := m.hooks.RunBefore(ctx, "create", hctx); err != nil {
+		return nil, err
+	}
+
 	// 1. Allocate ports
-	m.progress.OnStep(StepEvent{Step: "allocate_ports", Status: StepStarted, Message: "Allocating ports..."})
-	ports := m.networking.AllocatePorts(envName)
-	m.progress.OnStep(StepEvent{Step: "allocate_ports", Status: StepCompleted, Message: "Ports allocated"})
+	var ports PortMap
+	if err := m.step(ctx, "allocate_ports", "Allocating ports...", msg("Ports allocated"), hctx, func() error {
+		ports = m.networking.AllocatePorts(envName)
+		hctx.Ports = ports
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("allocating ports: %w", err)
+	}
 
 	// 2. Create compute resources
-	m.progress.OnStep(StepEvent{Step: "create_compute", Status: StepStarted, Message: "Creating compute resources..."})
-	resources, err := m.compute.Create(ctx, envName, branch)
-	if err != nil {
-		m.progress.OnStep(StepEvent{Step: "create_compute", Status: StepFailed, Error: err})
+	var resources *ComputeResources
+	if err := m.step(ctx, "create_compute", "Creating compute resources...", msg("Compute resources created"), hctx, func() error {
+		var err error
+		resources, err = m.compute.Create(ctx, envName, branch)
+		if err != nil {
+			return err
+		}
+		hctx.WorktreePath = resources.WorktreePath
+		return nil
+	}); err != nil {
 		return nil, fmt.Errorf("creating compute resources: %w", err)
 	}
-	m.progress.OnStep(StepEvent{Step: "create_compute", Status: StepCompleted, Message: "Compute resources created"})
 
 	// 3. Set up databases
 	dbInfos := make(map[string]*DatabaseInfo)
 	dbRefs := make(map[string]DatabaseRef)
 	for dbName, dbPort := range m.databases {
-		stepName := fmt.Sprintf("ensure_database_%s", dbName)
-		m.progress.OnStep(StepEvent{Step: stepName, Status: StepStarted, Message: fmt.Sprintf("Connecting to %s server...", dbName)})
-		if err := dbPort.EnsureInfrastructure(ctx); err != nil {
-			m.progress.OnStep(StepEvent{Step: stepName, Status: StepFailed, Error: err})
+		if err := m.step(ctx, fmt.Sprintf("ensure_database_%s", dbName),
+			fmt.Sprintf("Connecting to %s server...", dbName),
+			msg(fmt.Sprintf("Connected to %s server", dbName)),
+			hctx, func() error {
+				return dbPort.EnsureInfrastructure(ctx)
+			}); err != nil {
 			return nil, fmt.Errorf("ensuring database %s infrastructure: %w", dbName, err)
 		}
-		m.progress.OnStep(StepEvent{Step: stepName, Status: StepCompleted, Message: fmt.Sprintf("Connected to %s server", dbName)})
 
-		stepName = fmt.Sprintf("clone_database_%s", dbName)
-		m.progress.OnStep(StepEvent{Step: stepName, Status: StepStarted, Message: fmt.Sprintf("Cloning %s database from template...", dbName)})
-		dbInfo, err := dbPort.CreateDatabase(ctx, envName)
-		if err != nil {
-			m.progress.OnStep(StepEvent{Step: stepName, Status: StepFailed, Error: err})
+		cloneMsg := fmt.Sprintf("Cloned %s database", dbName)
+		if err := m.step(ctx, fmt.Sprintf("clone_database_%s", dbName),
+			fmt.Sprintf("Cloning %s database from template...", dbName),
+			&cloneMsg,
+			hctx, func() error {
+				dbInfo, err := dbPort.CreateDatabase(ctx, envName)
+				if err != nil {
+					return err
+				}
+				dbInfos[dbName] = dbInfo
+				dbRefs[dbName] = DatabaseRef{Name: dbInfo.Database, Provider: "local-docker"}
+				hctx.Databases = dbInfos
+				cloneMsg = fmt.Sprintf("Cloned %s → %s", dbName, dbInfo.Database)
+				return nil
+			}); err != nil {
 			return nil, fmt.Errorf("creating database %s: %w", dbName, err)
 		}
-		m.progress.OnStep(StepEvent{Step: stepName, Status: StepCompleted, Message: fmt.Sprintf("Cloned %s → %s", dbName, dbInfo.Database)})
-
-		dbInfos[dbName] = dbInfo
-		dbRefs[dbName] = DatabaseRef{Name: dbInfo.Database, Provider: "local-docker"}
 	}
 
 	// 4. Symlink shared env files
-	m.progress.OnStep(StepEvent{Step: "symlink_env", Status: StepStarted, Message: "Symlinking shared env files..."})
-	if err := m.envgen.SymlinkSharedEnvFiles(ctx, resources.WorktreePath); err != nil {
-		m.progress.OnStep(StepEvent{Step: "symlink_env", Status: StepFailed, Error: err})
+	if err := m.step(ctx, "symlink_env", "Symlinking shared env files...", msg("Shared env files symlinked"), hctx, func() error {
+		return m.envgen.SymlinkSharedEnvFiles(ctx, resources.WorktreePath)
+	}); err != nil {
 		return nil, fmt.Errorf("symlinking env files: %w", err)
 	}
-	m.progress.OnStep(StepEvent{Step: "symlink_env", Status: StepCompleted})
 
 	// 5. Generate env files
-	m.progress.OnStep(StepEvent{Step: "generate_env", Status: StepStarted, Message: "Generating environment files..."})
-	if err := m.envgen.Generate(ctx, envName, resources.WorktreePath, ports, dbInfos); err != nil {
-		m.progress.OnStep(StepEvent{Step: "generate_env", Status: StepFailed, Error: err})
+	if err := m.step(ctx, "generate_env", "Generating .env.local files...", msg(".env.local files generated"), hctx, func() error {
+		return m.envgen.Generate(ctx, envName, resources.WorktreePath, ports, dbInfos)
+	}); err != nil {
 		return nil, fmt.Errorf("generating env files: %w", err)
 	}
-	m.progress.OnStep(StepEvent{Step: "generate_env", Status: StepCompleted})
 
 	// 6. Start per-env infrastructure
-	m.progress.OnStep(StepEvent{Step: "start_infra", Status: StepStarted, Message: "Starting infrastructure..."})
-	if err := m.compute.Start(ctx, envName, ports); err != nil {
-		m.progress.OnStep(StepEvent{Step: "start_infra", Status: StepFailed, Error: err})
+	if err := m.step(ctx, "start_infra", "Starting infrastructure containers...", msg("Infrastructure containers started"), hctx, func() error {
+		return m.compute.Start(ctx, envName, ports)
+	}); err != nil {
 		return nil, fmt.Errorf("starting infrastructure: %w", err)
 	}
-	m.progress.OnStep(StepEvent{Step: "start_infra", Status: StepCompleted})
 
 	// 7. Persist state
 	now := time.Now()
@@ -128,18 +183,28 @@ func (m *Manager) Init(ctx context.Context, envName string, branch string) (*Env
 		},
 	}
 
-	m.progress.OnStep(StepEvent{Step: "save_state", Status: StepStarted, Message: "Saving state..."})
-	if err := m.state.SetEnvironment(ctx, envName, entry); err != nil {
-		m.progress.OnStep(StepEvent{Step: "save_state", Status: StepFailed, Error: err})
+	if err := m.step(ctx, "save_state", "Saving state...", msg("State saved"), hctx, func() error {
+		return m.state.SetEnvironment(ctx, envName, entry)
+	}); err != nil {
 		return nil, fmt.Errorf("saving state: %w", err)
 	}
-	m.progress.OnStep(StepEvent{Step: "save_state", Status: StepCompleted})
+
+	// Lifecycle-level after hook
+	if err := m.hooks.RunAfter(ctx, "create", hctx); err != nil {
+		return nil, err
+	}
 
 	return entry, nil
 }
 
 // Destroy tears down an environment and cleans up all resources.
 func (m *Manager) Destroy(ctx context.Context, envName string) error {
+	hctx := &HookContext{
+		EnvName:     envName,
+		ProjectName: m.config.Name,
+	}
+
+	// Load state first (no hooks on this — we need the data)
 	m.progress.OnStep(StepEvent{Step: "load_state", Status: StepStarted, Message: "Loading environment state..."})
 	entry, err := m.state.GetEnvironment(ctx, envName)
 	if err != nil {
@@ -151,40 +216,55 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 		m.progress.OnStep(StepEvent{Step: "load_state", Status: StepFailed, Error: err})
 		return err
 	}
-	m.progress.OnStep(StepEvent{Step: "load_state", Status: StepCompleted})
+	m.progress.OnStep(StepEvent{Step: "load_state", Status: StepCompleted, Message: "Environment state loaded"})
 
-	m.progress.OnStep(StepEvent{Step: "destroy_compute", Status: StepStarted, Message: "Destroying compute resources..."})
-	if err := m.compute.Destroy(ctx, envName); err != nil {
-		m.progress.OnStep(StepEvent{Step: "destroy_compute", Status: StepFailed, Error: err})
+	// Populate hook context from loaded state
+	hctx.Branch = entry.Branch
+	hctx.Ports = entry.Ports
+	if entry.Local != nil {
+		hctx.WorktreePath = entry.Local.WorktreePath
+	}
+
+	// Lifecycle-level before hook
+	if err := m.hooks.RunBefore(ctx, "delete", hctx); err != nil {
+		return err
+	}
+
+	if err := m.step(ctx, "destroy_compute", "Removing worktree and stopping containers...", msg("Worktree and containers removed"), hctx, func() error {
+		return m.compute.Destroy(ctx, envName)
+	}); err != nil {
 		return fmt.Errorf("destroying compute resources: %w", err)
 	}
-	m.progress.OnStep(StepEvent{Step: "destroy_compute", Status: StepCompleted})
 
 	for dbName, dbPort := range m.databases {
-		stepName := fmt.Sprintf("destroy_database_%s", dbName)
-		m.progress.OnStep(StepEvent{Step: stepName, Status: StepStarted, Message: fmt.Sprintf("Destroying %s database...", dbName)})
-		if err := dbPort.DestroyDatabase(ctx, envName); err != nil {
-			m.progress.OnStep(StepEvent{Step: stepName, Status: StepFailed, Error: err})
+		if err := m.step(ctx, fmt.Sprintf("destroy_database_%s", dbName),
+			fmt.Sprintf("Dropping %s database...", dbName),
+			msg(fmt.Sprintf("Database %s dropped", dbName)),
+			hctx, func() error {
+				return dbPort.DestroyDatabase(ctx, envName)
+			}); err != nil {
 			return fmt.Errorf("destroying database %s: %w", dbName, err)
 		}
-		m.progress.OnStep(StepEvent{Step: stepName, Status: StepCompleted})
 	}
 
 	if entry.Local != nil && entry.Local.WorktreePath != "" {
-		m.progress.OnStep(StepEvent{Step: "cleanup_env", Status: StepStarted, Message: "Cleaning up env files..."})
-		if err := m.envgen.Cleanup(ctx, entry.Local.WorktreePath); err != nil {
-			m.progress.OnStep(StepEvent{Step: "cleanup_env", Status: StepFailed, Error: err})
+		if err := m.step(ctx, "cleanup_env", "Cleaning up env files...", msg("Env files cleaned up"), hctx, func() error {
+			return m.envgen.Cleanup(ctx, entry.Local.WorktreePath)
+		}); err != nil {
 			return fmt.Errorf("cleaning up env files: %w", err)
 		}
-		m.progress.OnStep(StepEvent{Step: "cleanup_env", Status: StepCompleted})
 	}
 
-	m.progress.OnStep(StepEvent{Step: "remove_state", Status: StepStarted, Message: "Removing state..."})
-	if err := m.state.RemoveEnvironment(ctx, envName); err != nil {
-		m.progress.OnStep(StepEvent{Step: "remove_state", Status: StepFailed, Error: err})
+	if err := m.step(ctx, "remove_state", "Removing state...", msg("State removed"), hctx, func() error {
+		return m.state.RemoveEnvironment(ctx, envName)
+	}); err != nil {
 		return fmt.Errorf("removing state: %w", err)
 	}
-	m.progress.OnStep(StepEvent{Step: "remove_state", Status: StepCompleted})
+
+	// Lifecycle-level after hook
+	if err := m.hooks.RunAfter(ctx, "delete", hctx); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -246,13 +326,35 @@ func (m *Manager) ResetDatabase(ctx context.Context, envName string, dbName stri
 		return fmt.Errorf("unknown database '%s'", dbName)
 	}
 
-	m.progress.OnStep(StepEvent{Step: "reset_database", Status: StepStarted, Message: fmt.Sprintf("Resetting %s database...", dbName)})
-	_, err := dbPort.ResetDatabase(ctx, envName)
-	if err != nil {
-		m.progress.OnStep(StepEvent{Step: "reset_database", Status: StepFailed, Error: err})
+	hctx := &HookContext{
+		EnvName:     envName,
+		ProjectName: m.config.Name,
+	}
+
+	// Lifecycle-level before hook
+	if err := m.hooks.RunBefore(ctx, "reset", hctx); err != nil {
+		return err
+	}
+
+	if err := m.step(ctx, "reset_database",
+		fmt.Sprintf("Resetting %s database...", dbName),
+		msg(fmt.Sprintf("Database %s reset", dbName)),
+		hctx, func() error {
+			info, err := dbPort.ResetDatabase(ctx, envName)
+			if err != nil {
+				return err
+			}
+			hctx.Databases = map[string]*DatabaseInfo{dbName: info}
+			return nil
+		}); err != nil {
 		return fmt.Errorf("resetting database %s: %w", dbName, err)
 	}
-	m.progress.OnStep(StepEvent{Step: "reset_database", Status: StepCompleted})
+
+	// Lifecycle-level after hook
+	if err := m.hooks.RunAfter(ctx, "reset", hctx); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -263,19 +365,27 @@ func (m *Manager) SeedTemplate(ctx context.Context, dbName string, snapshotPath 
 		return fmt.Errorf("unknown database '%s'", dbName)
 	}
 
-	m.progress.OnStep(StepEvent{Step: "ensure_infra", Status: StepStarted, Message: "Ensuring database infrastructure..."})
-	if err := dbPort.EnsureInfrastructure(ctx); err != nil {
-		m.progress.OnStep(StepEvent{Step: "ensure_infra", Status: StepFailed, Error: err})
+	hctx := &HookContext{
+		EnvName:     "",
+		ProjectName: m.config.Name,
+	}
+
+	// Lifecycle-level before hook
+	if err := m.hooks.RunBefore(ctx, "seed", hctx); err != nil {
+		return err
+	}
+
+	if err := m.step(ctx, "ensure_infra", "Ensuring database infrastructure...", msg("Database infrastructure ready"), hctx, func() error {
+		return dbPort.EnsureInfrastructure(ctx)
+	}); err != nil {
 		return fmt.Errorf("ensuring infrastructure: %w", err)
 	}
-	m.progress.OnStep(StepEvent{Step: "ensure_infra", Status: StepCompleted})
 
-	m.progress.OnStep(StepEvent{Step: "seed_template", Status: StepStarted, Message: "Seeding template database..."})
-	if err := dbPort.SeedTemplate(ctx, snapshotPath); err != nil {
-		m.progress.OnStep(StepEvent{Step: "seed_template", Status: StepFailed, Error: err})
+	if err := m.step(ctx, "seed_template", "Seeding template database...", msg("Template database seeded"), hctx, func() error {
+		return dbPort.SeedTemplate(ctx, snapshotPath)
+	}); err != nil {
 		return fmt.Errorf("seeding template: %w", err)
 	}
-	m.progress.OnStep(StepEvent{Step: "seed_template", Status: StepCompleted})
 
 	now := time.Now()
 	ready := true
@@ -284,6 +394,11 @@ func (m *Manager) SeedTemplate(ctx context.Context, dbName string, snapshotPath 
 		TemplateReady: &ready,
 	}); err != nil {
 		return fmt.Errorf("updating snapshot state: %w", err)
+	}
+
+	// Lifecycle-level after hook
+	if err := m.hooks.RunAfter(ctx, "seed", hctx); err != nil {
+		return err
 	}
 
 	return nil

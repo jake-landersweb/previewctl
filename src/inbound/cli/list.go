@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"text/tabwriter"
+
+	"charm.land/lipgloss/v2"
 
 	"github.com/spf13/cobra"
 )
@@ -33,20 +34,40 @@ func newListCmd() *cobra.Command {
 			}
 
 			if len(entries) == 0 {
-				fmt.Println("No environments found.")
+				fmt.Fprintf(os.Stderr, "\n%s\n\n", styleDim.Render("No environments found."))
 				return nil
 			}
 
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tBRANCH\tSTATUS\tMODE\tPATH")
-			for _, e := range entries {
+			headerStyle := lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorDim)
+
+			nameStyle := lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorCyan)
+
+			fmt.Println()
+			for i, e := range entries {
 				path := ""
 				if e.Local != nil {
 					path = e.Local.WorktreePath
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Name, e.Branch, e.Status, e.Mode, path)
+
+				fmt.Fprintf(os.Stderr, "  %s  %s  %s\n",
+					nameStyle.Render(e.Name),
+					headerStyle.Render("on"),
+					styleMessage.Render(e.Branch),
+				)
+				fmt.Fprintf(os.Stderr, "    %s  %s  %s\n",
+					StatusBadge(string(e.Status)),
+					styleDim.Render("·"),
+					styleDim.Render(path),
+				)
+				if i < len(entries)-1 {
+					fmt.Fprintln(os.Stderr)
+				}
 			}
-			w.Flush()
+			fmt.Fprintln(os.Stderr)
 
 			return nil
 		},

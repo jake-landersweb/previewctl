@@ -21,11 +21,12 @@ func Execute() {
 	}
 
 	rootCmd.AddCommand(
-		newInitCmd(),
-		newDestroyCmd(),
+		newCreateCmd(),
+		newDeleteCmd(),
 		newListCmd(),
 		newStatusCmd(),
 		newDbCmd(),
+		newVetCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -35,7 +36,7 @@ func Execute() {
 
 // buildManager loads config, wires adapters, and creates a Manager.
 func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.ProjectConfig, error) {
-	cfg, err := loadConfig()
+	cfg, projectRoot, err := loadConfig()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -51,8 +52,16 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 		}
 	}
 
-	// Determine compose file for per-env infrastructure
-	composeFile := findComposeFile()
+	// Resolve compose file from config (relative to project root)
+	composeFile := ""
+	if cfg.Local != nil && cfg.Local.ComposeFile != "" {
+		composeFile = filepath.Join(projectRoot, cfg.Local.ComposeFile)
+		if _, err := os.Stat(composeFile); os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("compose file not found: %s", composeFile)
+		}
+	} else if len(cfg.Infrastructure) > 0 {
+		return nil, nil, fmt.Errorf("infrastructure services defined but 'local.composeFile' is not set in %s", configFileName)
+	}
 
 	// Build state path
 	home, _ := os.UserHomeDir()
@@ -72,40 +81,29 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 }
 
 // loadConfig searches for previewctl.yaml starting from cwd and walking up.
-func loadConfig() (*domain.ProjectConfig, error) {
+// Returns the config and the directory where it was found (project root).
+func loadConfig() (*domain.ProjectConfig, string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return nil, fmt.Errorf("getting cwd: %w", err)
+		return nil, "", fmt.Errorf("getting cwd: %w", err)
 	}
 
 	dir := cwd
 	for {
 		path := filepath.Join(dir, configFileName)
 		if _, err := os.Stat(path); err == nil {
-			return domain.LoadConfig(path)
+			cfg, err := domain.LoadConfig(path)
+			if err != nil {
+				return nil, "", err
+			}
+			return cfg, dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return nil, fmt.Errorf("could not find %s in %s or any parent directory", configFileName, cwd)
+			return nil, "", fmt.Errorf("could not find %s in %s or any parent directory", configFileName, cwd)
 		}
 		dir = parent
 	}
-}
-
-// findComposeFile looks for a compose.worktree.yaml file.
-func findComposeFile() string {
-	cwd, _ := os.Getwd()
-	candidates := []string{
-		filepath.Join(cwd, "preview", "infra", "compose.worktree.yaml"),
-		filepath.Join(cwd, "compose.worktree.yaml"),
-		filepath.Join(cwd, "docker-compose.worktree.yaml"),
-	}
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return ""
 }
 
 // resolveEnvName resolves an environment name from args or cwd.
