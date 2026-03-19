@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,6 +39,21 @@ func connectTestDB(t *testing.T, pg *testutil.PostgresContainer, dbName string) 
 	return db
 }
 
+func seedTemplate(t *testing.T, adapter *PostgresAdapter, ctx context.Context, materials []*domain.SeedMaterial) {
+	t.Helper()
+	if err := adapter.PrepareTemplate(ctx); err != nil {
+		t.Fatalf("PrepareTemplate failed: %v", err)
+	}
+	for _, m := range materials {
+		if err := adapter.ApplySeedStep(ctx, m, io.Discard); err != nil {
+			t.Fatalf("ApplySeedStep failed: %v", err)
+		}
+	}
+	if err := adapter.FinalizeTemplate(ctx); err != nil {
+		t.Fatalf("FinalizeTemplate failed: %v", err)
+	}
+}
+
 func TestPostgresAdapter_EnsureInfrastructure(t *testing.T) {
 	ctx := context.Background()
 	pg := testutil.StartPostgres(ctx, t)
@@ -55,9 +71,7 @@ func TestPostgresAdapter_SeedTemplate_Empty(t *testing.T) {
 	adapter := newTestPostgresAdapter(t, pg)
 
 	// Seed with no materials — should create an empty template db
-	if err := adapter.SeedTemplate(ctx, []*domain.SeedMaterial{}); err != nil {
-		t.Fatalf("SeedTemplate failed: %v", err)
-	}
+	seedTemplate(t, adapter, ctx, nil)
 
 	// Verify template database exists and is marked as template
 	db := connectTestDB(t, pg, "postgres")
@@ -96,9 +110,7 @@ INSERT INTO users (name) VALUES ('alice'), ('bob');`
 	materials := []*domain.SeedMaterial{
 		{Kind: domain.SeedSQL, SQLPath: seedFile},
 	}
-	if err := adapter.SeedTemplate(ctx, materials); err != nil {
-		t.Fatalf("SeedTemplate with sql material failed: %v", err)
-	}
+	seedTemplate(t, adapter, ctx, materials)
 
 	// Verify seed data exists in the template
 	db := connectTestDB(t, pg, "postgres")
@@ -143,9 +155,7 @@ INSERT INTO items (title) VALUES ('item1'), ('item2'), ('item3');`
 	materials := []*domain.SeedMaterial{
 		{Kind: domain.SeedSQL, SQLPath: seedFile},
 	}
-	if err := adapter.SeedTemplate(ctx, materials); err != nil {
-		t.Fatalf("SeedTemplate failed: %v", err)
-	}
+	seedTemplate(t, adapter, ctx, materials)
 
 	// Create environment database from template
 	dbInfo, err := adapter.CreateDatabase(ctx, "feat-auth")
@@ -179,9 +189,7 @@ func TestPostgresAdapter_DatabaseExists(t *testing.T) {
 	adapter := newTestPostgresAdapter(t, pg)
 
 	// Seed template
-	if err := adapter.SeedTemplate(ctx, []*domain.SeedMaterial{}); err != nil {
-		t.Fatalf("SeedTemplate failed: %v", err)
-	}
+	seedTemplate(t, adapter, ctx, nil)
 
 	// Before creating — should not exist
 	exists, err := adapter.DatabaseExists(ctx, "test-env")
@@ -213,7 +221,7 @@ func TestPostgresAdapter_DestroyDatabase(t *testing.T) {
 	adapter := newTestPostgresAdapter(t, pg)
 
 	// Seed + create
-	adapter.SeedTemplate(ctx, []*domain.SeedMaterial{})
+	seedTemplate(t, adapter, ctx, nil)
 	adapter.CreateDatabase(ctx, "destroy-test")
 
 	// Destroy
@@ -248,7 +256,7 @@ func TestPostgresAdapter_ResetDatabase(t *testing.T) {
 	materials := []*domain.SeedMaterial{
 		{Kind: domain.SeedSQL, SQLPath: seedFile},
 	}
-	adapter.SeedTemplate(ctx, materials)
+	seedTemplate(t, adapter, ctx, materials)
 	adapter.CreateDatabase(ctx, "reset-test")
 
 	// Mutate the cloned database
@@ -281,7 +289,7 @@ func TestPostgresAdapter_MultipleEnvironments(t *testing.T) {
 	pg := testutil.StartPostgres(ctx, t)
 	adapter := newTestPostgresAdapter(t, pg)
 
-	adapter.SeedTemplate(ctx, []*domain.SeedMaterial{})
+	seedTemplate(t, adapter, ctx, nil)
 
 	// Create multiple environments
 	envs := []string{"env-alpha", "env-beta", "env-gamma"}
@@ -325,12 +333,8 @@ func TestPostgresAdapter_SeedTemplate_Idempotent(t *testing.T) {
 	adapter := newTestPostgresAdapter(t, pg)
 
 	// Seed twice — second call should re-seed cleanly
-	if err := adapter.SeedTemplate(ctx, []*domain.SeedMaterial{}); err != nil {
-		t.Fatalf("first SeedTemplate failed: %v", err)
-	}
-	if err := adapter.SeedTemplate(ctx, []*domain.SeedMaterial{}); err != nil {
-		t.Fatalf("second SeedTemplate failed: %v", err)
-	}
+	seedTemplate(t, adapter, ctx, nil)
+	seedTemplate(t, adapter, ctx, nil)
 
 	// Should still be able to create databases
 	if _, err := adapter.CreateDatabase(ctx, "after-reseed"); err != nil {

@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"fmt"
+	"io"
 	"testing"
 )
 
@@ -26,8 +27,18 @@ func (m *mockDatabasePort) EnsureInfrastructure(_ context.Context) error {
 	return nil
 }
 
-func (m *mockDatabasePort) SeedTemplate(_ context.Context, materials []*SeedMaterial) error {
-	m.tracker.record(fmt.Sprintf("db.%s.SeedTemplate", m.name))
+func (m *mockDatabasePort) PrepareTemplate(_ context.Context) error {
+	m.tracker.record(fmt.Sprintf("db.%s.PrepareTemplate", m.name))
+	return nil
+}
+
+func (m *mockDatabasePort) ApplySeedStep(_ context.Context, _ *SeedMaterial, _ io.Writer) error {
+	m.tracker.record(fmt.Sprintf("db.%s.ApplySeedStep", m.name))
+	return nil
+}
+
+func (m *mockDatabasePort) FinalizeTemplate(_ context.Context) error {
+	m.tracker.record(fmt.Sprintf("db.%s.FinalizeTemplate", m.name))
 	return nil
 }
 
@@ -409,7 +420,8 @@ func TestManager_SeedTemplate(t *testing.T) {
 
 	expectedCalls := []string{
 		"db.main.EnsureInfrastructure",
-		"db.main.SeedTemplate",
+		"db.main.PrepareTemplate",
+		"db.main.FinalizeTemplate",
 		"state.UpdateSnapshot",
 	}
 

@@ -1,6 +1,9 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
 // DatabasePort manages per-environment database lifecycle.
 // Local: template cloning on shared Postgres.
@@ -9,8 +12,15 @@ type DatabasePort interface {
 	// EnsureInfrastructure ensures the database server is running and reachable.
 	EnsureInfrastructure(ctx context.Context) error
 
-	// SeedTemplate populates the template database from resolved seed materials.
-	SeedTemplate(ctx context.Context, materials []*SeedMaterial) error
+	// PrepareTemplate drops and recreates an empty template database.
+	PrepareTemplate(ctx context.Context) error
+
+	// ApplySeedStep applies a single resolved seed step to the template database.
+	// For SeedCommand steps, stdout/stderr are written to the provided writer.
+	ApplySeedStep(ctx context.Context, step *SeedMaterial, output io.Writer) error
+
+	// FinalizeTemplate marks the template as ready (e.g., IS_TEMPLATE = true for Postgres).
+	FinalizeTemplate(ctx context.Context) error
 
 	// CreateDatabase creates an isolated database for the given environment.
 	CreateDatabase(ctx context.Context, envName string) (*DatabaseInfo, error)

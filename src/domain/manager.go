@@ -3,6 +3,10 @@ package domain
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -430,31 +434,63 @@ func (m *Manager) SeedTemplate(ctx context.Context, dbName string) error {
 	// Resolve seed steps
 	var materials []*SeedMaterial
 	if len(modeCfg.Seed) > 0 && m.seedResolver != nil {
-		resolveMsg := fmt.Sprintf("Resolved %d seed step(s)", len(modeCfg.Seed))
+		resolveMsg := "Resolved seed steps"
 		if err := m.step(ctx, "resolve_seed",
-			fmt.Sprintf("Resolving %d seed step(s)...", len(modeCfg.Seed)),
+			"Resolving seed steps...",
 			&resolveMsg,
 			hctx, func() error {
 				var err error
 				materials, err = m.seedResolver.Resolve(ctx, modeCfg.Seed, m.projectRoot)
-				return err
+				if err != nil {
+					return err
+				}
+				// Build descriptive resolve message
+				descriptions := make([]string, len(materials))
+				for i, mat := range materials {
+					descriptions[i] = describeMaterial(mat)
+				}
+				resolveMsg = fmt.Sprintf("Resolved %d step(s): %s", len(materials), strings.Join(descriptions, ", "))
+				return nil
 			}); err != nil {
 			return fmt.Errorf("resolving seed: %w", err)
 		}
 	}
 
-	seedSource := fmt.Sprintf("%d step(s)", len(modeCfg.Seed))
-	if len(modeCfg.Seed) == 0 {
-		seedSource = "empty template"
-	}
-	seedCompleteMsg := fmt.Sprintf("Seeded %s from %s", modeCfg.TemplateDb, seedSource)
-	if err := m.step(ctx, "seed_template",
-		fmt.Sprintf("Seeding %s from %s...", modeCfg.TemplateDb, seedSource),
-		&seedCompleteMsg,
+	// Prepare template (drop/create empty)
+	prepareMsg := fmt.Sprintf("Prepared empty template %s", modeCfg.TemplateDb)
+	if err := m.step(ctx, "prepare_template",
+		fmt.Sprintf("Preparing template %s...", modeCfg.TemplateDb),
+		&prepareMsg,
 		hctx, func() error {
-			return dbPort.SeedTemplate(ctx, materials)
+			return dbPort.PrepareTemplate(ctx)
 		}); err != nil {
-		return fmt.Errorf("seeding template: %w", err)
+		return fmt.Errorf("preparing template: %w", err)
+	}
+
+	// Apply each seed step individually
+	for i, mat := range materials {
+		stepName := fmt.Sprintf("seed_step_%d", i+1)
+		desc := describeMaterial(mat)
+		completeMsg := fmt.Sprintf("Completed: %s", desc)
+		if err := m.step(ctx, stepName,
+			fmt.Sprintf("[%d/%d] %s...", i+1, len(materials), desc),
+			&completeMsg,
+			hctx, func() error {
+				return dbPort.ApplySeedStep(ctx, mat, m.seedOutput())
+			}); err != nil {
+			return fmt.Errorf("seed step %d (%s): %w", i+1, desc, err)
+		}
+	}
+
+	// Finalize template
+	finalizeMsg := fmt.Sprintf("Template %s ready", modeCfg.TemplateDb)
+	if err := m.step(ctx, "finalize_template",
+		fmt.Sprintf("Finalizing template %s...", modeCfg.TemplateDb),
+		&finalizeMsg,
+		hctx, func() error {
+			return dbPort.FinalizeTemplate(ctx)
+		}); err != nil {
+		return fmt.Errorf("finalizing template: %w", err)
 	}
 
 	now := time.Now()
@@ -472,4 +508,23 @@ func (m *Manager) SeedTemplate(ctx context.Context, dbName string) error {
 	}
 
 	return nil
+}
+
+// describeMaterial returns a human-readable description of a seed material.
+func describeMaterial(mat *SeedMaterial) string {
+	switch mat.Kind {
+	case SeedSQL:
+		return fmt.Sprintf("sql: %s", filepath.Base(mat.SQLPath))
+	case SeedDump:
+		return fmt.Sprintf("dump: %s", filepath.Base(mat.DumpPath))
+	case SeedCommand:
+		return fmt.Sprintf("run: %s", mat.Command)
+	default:
+		return "unknown"
+	}
+}
+
+// seedOutput returns a writer for seed step output (stderr).
+func (m *Manager) seedOutput() io.Writer {
+	return os.Stderr
 }

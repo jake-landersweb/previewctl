@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -49,7 +50,7 @@ func (a *PostgresAdapter) EnsureInfrastructure(ctx context.Context) error {
 	return db.PingContext(ctx)
 }
 
-func (a *PostgresAdapter) SeedTemplate(ctx context.Context, materials []*domain.SeedMaterial) error {
+func (a *PostgresAdapter) PrepareTemplate(ctx context.Context) error {
 	db, err := a.connectDB(ctx, "postgres")
 	if err != nil {
 		return fmt.Errorf("connecting to postgres: %w", err)
@@ -73,56 +74,71 @@ func (a *PostgresAdapter) SeedTemplate(ctx context.Context, materials []*domain.
 		return fmt.Errorf("creating template db: %w", err)
 	}
 
-	// Execute seed materials
-	for i, mat := range materials {
-		switch mat.Kind {
-		case domain.SeedSQL:
-			seedSQL, err := os.ReadFile(mat.SQLPath)
-			if err != nil {
-				return fmt.Errorf("seed step %d: reading sql file: %w", i, err)
-			}
-			templateConn, err := a.connectDB(ctx, templateDb)
-			if err != nil {
-				return fmt.Errorf("seed step %d: connecting to template db: %w", i, err)
-			}
-			if _, err := templateConn.ExecContext(ctx, string(seedSQL)); err != nil {
-				_ = templateConn.Close()
-				return fmt.Errorf("seed step %d: running sql: %w", i, err)
-			}
-			_ = templateConn.Close()
+	return nil
+}
 
-		case domain.SeedDump:
-			cmd := exec.CommandContext(ctx, "pg_restore",
-				"--jobs=4", "--no-owner", "--no-acl",
-				"-h", a.host, "-p", fmt.Sprintf("%d", a.config.Port), "-U", a.config.User,
-				"-d", templateDb,
-				mat.DumpPath,
-			)
-			cmd.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", a.config.Password))
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("seed step %d: pg_restore: %s", i, string(out))
-			}
+func (a *PostgresAdapter) ApplySeedStep(ctx context.Context, step *domain.SeedMaterial, output io.Writer) error {
+	templateDb := a.config.TemplateDb
 
-		case domain.SeedCommand:
-			databaseURL := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s",
-				a.config.User, a.config.Password, a.host, a.config.Port, templateDb)
-			cmd := exec.CommandContext(ctx, "sh", "-c", mat.Command)
-			cmd.Env = append(os.Environ(),
-				fmt.Sprintf("PGHOST=%s", a.host),
-				fmt.Sprintf("PGPORT=%d", a.config.Port),
-				fmt.Sprintf("PGUSER=%s", a.config.User),
-				fmt.Sprintf("PGPASSWORD=%s", a.config.Password),
-				fmt.Sprintf("PGDATABASE=%s", templateDb),
-				fmt.Sprintf("DATABASE_URL=%s", databaseURL),
-			)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("seed step %d: run command: %s", i, string(out))
-			}
+	switch step.Kind {
+	case domain.SeedSQL:
+		seedSQL, err := os.ReadFile(step.SQLPath)
+		if err != nil {
+			return fmt.Errorf("reading sql file: %w", err)
+		}
+		templateConn, err := a.connectDB(ctx, templateDb)
+		if err != nil {
+			return fmt.Errorf("connecting to template db: %w", err)
+		}
+		defer func() { _ = templateConn.Close() }()
+		if _, err := templateConn.ExecContext(ctx, string(seedSQL)); err != nil {
+			return fmt.Errorf("running sql: %w", err)
+		}
+
+	case domain.SeedDump:
+		cmd := exec.CommandContext(ctx, "pg_restore",
+			"--jobs=4", "--no-owner", "--no-acl",
+			"-h", a.host, "-p", fmt.Sprintf("%d", a.config.Port), "-U", a.config.User,
+			"-d", templateDb,
+			step.DumpPath,
+		)
+		cmd.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", a.config.Password))
+		cmd.Stdout = output
+		cmd.Stderr = output
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("pg_restore failed: %w", err)
+		}
+
+	case domain.SeedCommand:
+		databaseURL := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s",
+			a.config.User, a.config.Password, a.host, a.config.Port, templateDb)
+		cmd := exec.CommandContext(ctx, "sh", "-c", step.Command)
+		cmd.Env = append(os.Environ(),
+			fmt.Sprintf("PGHOST=%s", a.host),
+			fmt.Sprintf("PGPORT=%d", a.config.Port),
+			fmt.Sprintf("PGUSER=%s", a.config.User),
+			fmt.Sprintf("PGPASSWORD=%s", a.config.Password),
+			fmt.Sprintf("PGDATABASE=%s", templateDb),
+			fmt.Sprintf("DATABASE_URL=%s", databaseURL),
+		)
+		cmd.Stdout = output
+		cmd.Stderr = output
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("command failed: %w", err)
 		}
 	}
 
-	// Mark as template
-	_, err = db.ExecContext(ctx, fmt.Sprintf("ALTER DATABASE %s IS_TEMPLATE = true", quoteIdent(templateDb)))
+	return nil
+}
+
+func (a *PostgresAdapter) FinalizeTemplate(ctx context.Context) error {
+	db, err := a.connectDB(ctx, "postgres")
+	if err != nil {
+		return fmt.Errorf("connecting to postgres: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	_, err = db.ExecContext(ctx, fmt.Sprintf("ALTER DATABASE %s IS_TEMPLATE = true", quoteIdent(a.config.TemplateDb)))
 	if err != nil {
 		return fmt.Errorf("marking template: %w", err)
 	}
