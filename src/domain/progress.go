@@ -8,6 +8,7 @@ const (
 	StepCompleted StepStatus = "completed"
 	StepFailed    StepStatus = "failed"
 	StepSkipped   StepStatus = "skipped"
+	StepStreaming StepStatus = "streaming" // stop spinner, hook will stream its own output
 )
 
 // StepEvent is emitted by the manager at each lifecycle transition.

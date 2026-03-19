@@ -19,21 +19,14 @@ func ExecuteCoreHook(ctx context.Context, hookScript string, declaredOutputs []s
 	cmd.Env = env
 
 	var stdout bytes.Buffer
-	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+
+	// Stream stderr in real-time for visibility.
+	// Caller should emit StepStreaming to stop the spinner before this runs.
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		// Print stderr on failure for debugging
-		if stderr.Len() > 0 {
-			fmt.Fprintf(os.Stderr, "\n%s", stderr.String())
-		}
 		return nil, fmt.Errorf("hook failed: %w", err)
-	}
-
-	// Print stderr after completion so it doesn't interfere with spinners
-	if stderr.Len() > 0 {
-		fmt.Fprintf(os.Stderr, "\n%s", stderr.String())
 	}
 
 	outputs := parseHookOutput(stdout.String())
