@@ -24,17 +24,15 @@ core:
 services:
   backend:
     path: apps/backend
-    port: 8000
     command: pnpm dev
     depends_on: [redis]
     env:
-      PORT: "{{ports.backend}}"
+      PORT: "{{services.backend.port}}"
   web:
     path: apps/web
-    port: 3000
     depends_on: [backend]
     env:
-      PORT: "{{ports.web}}"
+      PORT: "{{services.web.port}}"
 
 local:
   worktree:
@@ -94,7 +92,6 @@ version: 1
 services:
   backend:
     path: apps/backend
-    port: 8000
 `)
 	_, err := ParseConfig(yaml)
 	if err == nil {
@@ -108,7 +105,6 @@ name: myproject
 services:
   backend:
     path: apps/backend
-    port: 8000
 `)
 	_, err := ParseConfig(yaml)
 	if err == nil {
@@ -122,25 +118,11 @@ version: 1
 name: myproject
 services:
   backend:
-    port: 8000
+    command: pnpm dev
 `)
 	_, err := ParseConfig(yaml)
 	if err == nil {
 		t.Fatal("expected error for service missing path")
-	}
-}
-
-func TestParseConfig_ServiceMissingPort(t *testing.T) {
-	yaml := []byte(`
-version: 1
-name: myproject
-services:
-  backend:
-    path: apps/backend
-`)
-	_, err := ParseConfig(yaml)
-	if err == nil {
-		t.Fatal("expected error for service missing port")
 	}
 }
 
@@ -157,7 +139,6 @@ core:
 services:
   backend:
     path: apps/backend
-    port: 8000
 `)
 	_, err := ParseConfig(yaml)
 	if err == nil {
@@ -182,7 +163,6 @@ core:
 services:
   backend:
     path: apps/backend
-    port: 8000
 `)
 	cfg, err := ParseConfig(yaml)
 	if err != nil {
@@ -209,14 +189,10 @@ core:
         template_db: dev_template
         seed:
           - sql: schema.sql
-          - s3:
-              bucket: my-snapshots
-              key: dev/dump.sql
-              region: us-east-1
+          - run: npm run migrate
 services:
   backend:
     path: apps/backend
-    port: 8000
 `)
 	cfg, err := ParseConfig(yaml)
 	if err != nil {
@@ -229,33 +205,8 @@ services:
 	if seed[0].SQL != "schema.sql" {
 		t.Errorf("expected first step sql 'schema.sql', got '%s'", seed[0].SQL)
 	}
-	if seed[1].S3 == nil || seed[1].S3.Bucket != "my-snapshots" {
-		t.Errorf("expected second step s3 bucket 'my-snapshots'")
+	if seed[1].Run != "npm run migrate" {
+		t.Errorf("expected second step run 'npm run migrate', got '%s'", seed[1].Run)
 	}
 }
 
-func TestAllBasePorts(t *testing.T) {
-	cfg := &ProjectConfig{
-		Services: map[string]ServiceConfig{
-			"backend": {Path: "apps/backend", Port: 8000},
-			"web":     {Path: "apps/web", Port: 3000},
-		},
-		InfraServices: map[string]InfraService{
-			"redis": {Name: "redis", Image: "redis:7-alpine", Port: 6379},
-		},
-	}
-
-	ports := cfg.AllBasePorts()
-	if ports["backend"] != 8000 {
-		t.Errorf("expected backend port 8000, got %d", ports["backend"])
-	}
-	if ports["web"] != 3000 {
-		t.Errorf("expected web port 3000, got %d", ports["web"])
-	}
-	if ports["redis"] != 6379 {
-		t.Errorf("expected redis port 6379, got %d", ports["redis"])
-	}
-	if len(ports) != 3 {
-		t.Errorf("expected 3 ports, got %d", len(ports))
-	}
-}

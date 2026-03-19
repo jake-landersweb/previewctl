@@ -100,8 +100,8 @@ func setupManager(t *testing.T, pg *testutil.PostgresContainer) (*domain.Manager
 			},
 		},
 		Services: map[string]domain.ServiceConfig{
-			"backend": {Path: "apps/backend", Port: 8000},
-			"web":     {Path: "apps/web", Port: 3000},
+			"backend": {Path: "apps/backend"},
+			"web":     {Path: "apps/web"},
 		},
 		InfraServices: map[string]domain.InfraService{
 			"redis": {Name: "redis", Image: "redis:7-alpine", Port: 6379},
@@ -182,15 +182,11 @@ func TestIntegration_FullLifecycle(t *testing.T) {
 		t.Errorf("expected 2 products in cloned db, got %d", count)
 	}
 
-	// Verify ports were allocated with offset from base
-	if entry.Ports["backend"] <= 8000 {
-		t.Errorf("expected backend port > 8000, got %d", entry.Ports["backend"])
-	}
-	if entry.Ports["web"] <= 3000 {
-		t.Errorf("expected web port > 3000, got %d", entry.Ports["web"])
-	}
-	if entry.Ports["redis"] <= 6379 {
-		t.Errorf("expected redis port > 6379, got %d", entry.Ports["redis"])
+	// Verify ports were allocated in the expected range
+	for name, port := range entry.Ports {
+		if port < 61000 || port >= 65000 {
+			t.Errorf("expected %s port in [61000, 65000), got %d", name, port)
+		}
 	}
 
 	// 3. List environments
@@ -267,10 +263,12 @@ func TestIntegration_MultipleEnvironments(t *testing.T) {
 		}
 	}
 
-	// Verify all ports have offset from base (> base port)
+	// Verify all ports are in the expected range
 	for _, entry := range entries {
-		if entry.Ports["backend"] <= 8000 {
-			t.Errorf("expected backend port > 8000 for %s, got %d", entry.Name, entry.Ports["backend"])
+		for name, port := range entry.Ports {
+			if port < 61000 || port >= 65000 {
+				t.Errorf("expected %s port in [61000, 65000) for %s, got %d", name, entry.Name, port)
+			}
 		}
 	}
 

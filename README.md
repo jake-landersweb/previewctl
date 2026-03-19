@@ -84,24 +84,22 @@ infrastructure:
 services:
   backend:
     path: apps/backend
-    port: 8000
     command: pnpm dev
     depends_on: [redis]
     env:
-      PORT: "{{ports.backend}}"
-      DATABASE_URL: "{{databases.main}}"
+      PORT: "{{services.backend.port}}"
+      DATABASE_URL: "{{core.databases.main.connection_string}}"
+      REDIS_PORT: "{{infrastructure.redis.port}}"
 
   web:
     path: apps/web
-    port: 3000
     depends_on: [backend]
     env:
-      NEXT_PUBLIC_API_URL: "http://localhost:{{ports.backend}}"
+      NEXT_PUBLIC_API_URL: "http://localhost:{{services.backend.port}}"
 
 local:
   worktree:
     symlink_patterns: [".env", ".env.*"]
-  compose_file: compose.worktree.yaml
 
 hooks:
   create:
@@ -116,9 +114,14 @@ Use these in service `env` values:
 
 | Variable | Description |
 |---|---|
-| `{{ports.<service>}}` | Allocated port for a service |
-| `{{databases.<name>}}` | Connection string for a database |
-| `{{env.<VAR>}}` | Value from an existing environment variable |
+| `{{services.<name>.port}}` | Allocated port for an application service |
+| `{{infrastructure.<name>.port}}` | Allocated port for an infrastructure service |
+| `{{core.databases.<name>.connection_string}}` | Database connection string |
+| `{{core.databases.<name>.host}}` | Database host |
+| `{{core.databases.<name>.port}}` | Database port |
+| `{{core.databases.<name>.user}}` | Database user |
+| `{{core.databases.<name>.password}}` | Database password |
+| `{{core.databases.<name>.database}}` | Database name |
 
 ### Hooks
 

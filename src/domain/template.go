@@ -10,13 +10,15 @@ var templateVarPattern = regexp.MustCompile(`\{\{([^}]+)\}\}`)
 
 // TemplateContext holds the values available for template substitution.
 type TemplateContext struct {
-	Ports     PortMap
-	Databases map[string]*DatabaseInfo
+	ServicePorts PortMap
+	InfraPorts   PortMap
+	Databases    map[string]*DatabaseInfo
 }
 
 // RenderTemplate replaces {{var}} placeholders in a string with values from the context.
 // Supported variable patterns:
-//   - {{ports.<service>}} — allocated port for a service
+//   - {{services.<name>.port}} — allocated port for an application service
+//   - {{infrastructure.<name>.port}} — allocated port for an infrastructure service
 //   - {{core.databases.<name>.connection_string}} — database connection string
 //   - {{core.databases.<name>.host}} — database host
 //   - {{core.databases.<name>.port}} — database port
@@ -67,13 +69,23 @@ func resolveVar(parts []string, ctx *TemplateContext) (string, error) {
 	}
 
 	switch parts[0] {
-	case "ports":
-		if len(parts) != 2 {
-			return "", fmt.Errorf("expected ports.<service>, got %s", strings.Join(parts, "."))
+	case "services":
+		if len(parts) != 3 || parts[2] != "port" {
+			return "", fmt.Errorf("expected services.<name>.port, got %s", strings.Join(parts, "."))
 		}
-		port, ok := ctx.Ports[parts[1]]
+		port, ok := ctx.ServicePorts[parts[1]]
 		if !ok {
 			return "", fmt.Errorf("unknown service '%s'", parts[1])
+		}
+		return fmt.Sprintf("%d", port), nil
+
+	case "infrastructure":
+		if len(parts) != 3 || parts[2] != "port" {
+			return "", fmt.Errorf("expected infrastructure.<name>.port, got %s", strings.Join(parts, "."))
+		}
+		port, ok := ctx.InfraPorts[parts[1]]
+		if !ok {
+			return "", fmt.Errorf("unknown infrastructure service '%s'", parts[1])
 		}
 		return fmt.Sprintf("%d", port), nil
 

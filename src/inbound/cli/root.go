@@ -8,7 +8,6 @@ import (
 
 	"github.com/jake-landersweb/previewctl/src/domain"
 	"github.com/jake-landersweb/previewctl/src/outbound/local"
-	s3adapter "github.com/jake-landersweb/previewctl/src/outbound/s3"
 	filestate "github.com/jake-landersweb/previewctl/src/outbound/state"
 	"github.com/jake-landersweb/previewctl/src/version"
 	"github.com/spf13/cobra"
@@ -69,36 +68,15 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 		}
 	}
 
-	// Resolve infrastructure compose file and parse services
+	// Resolve infrastructure compose file path (already parsed in loadConfig)
 	composeFile := ""
 	if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile != "" {
 		composeFile = filepath.Join(projectRoot, cfg.Infrastructure.ComposeFile)
-		if _, err := os.Stat(composeFile); os.IsNotExist(err) {
-			return nil, nil, fmt.Errorf("infrastructure compose file not found: %s", composeFile)
-		}
-		infraServices, err := domain.ParseComposeFile(composeFile)
-		if err != nil {
-			return nil, nil, fmt.Errorf("parsing infrastructure compose file: %w", err)
-		}
-		cfg.InfraServices = infraServices
 	}
 
 	// Build state path
 	home, _ := os.UserHomeDir()
 	statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
-
-	// Build seed resolver — use real S3 downloader if any database has S3 seed config
-	var s3dl domain.S3Downloader = s3adapter.NoopDownloader{}
-	for _, dbCfg := range cfg.Core.Databases {
-		if dbCfg.Local != nil {
-			for _, step := range dbCfg.Local.Seed {
-				if step.S3 != nil {
-					s3dl = s3adapter.NewDownloader()
-					break
-				}
-			}
-		}
-	}
 
 	mgr := domain.NewManager(domain.ManagerDeps{
 		Databases:    databases,
@@ -109,7 +87,7 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 		Progress:     progress,
 		Config:       cfg,
 		ProjectRoot:  projectRoot,
-		SeedResolver: domain.NewSeedResolver(s3dl),
+		SeedResolver: domain.NewSeedResolver(),
 	})
 
 	return mgr, cfg, nil
@@ -130,6 +108,15 @@ func loadConfig() (*domain.ProjectConfig, string, error) {
 			cfg, err := domain.LoadConfig(path)
 			if err != nil {
 				return nil, "", err
+			}
+			// Parse infrastructure compose file to populate InfraServices
+			if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile != "" {
+				composePath := filepath.Join(dir, cfg.Infrastructure.ComposeFile)
+				infraServices, err := domain.ParseComposeFile(composePath)
+				if err != nil {
+					return nil, "", fmt.Errorf("parsing infrastructure compose file: %w", err)
+				}
+				cfg.InfraServices = infraServices
 			}
 			return cfg, dir, nil
 		}

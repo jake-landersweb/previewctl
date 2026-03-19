@@ -30,14 +30,12 @@ type SeedMaterial struct {
 }
 
 // SeedResolver resolves SeedStep configs into ready-to-apply SeedMaterials.
-// It handles path resolution, S3 downloads, and decompression.
-type SeedResolver struct {
-	downloader S3Downloader
-}
+// It handles path resolution and decompression.
+type SeedResolver struct{}
 
-// NewSeedResolver creates a SeedResolver with the given S3 downloader.
-func NewSeedResolver(downloader S3Downloader) *SeedResolver {
-	return &SeedResolver{downloader: downloader}
+// NewSeedResolver creates a SeedResolver.
+func NewSeedResolver() *SeedResolver {
+	return &SeedResolver{}
 }
 
 // Resolve processes all seed steps into resolved materials.
@@ -48,7 +46,7 @@ func (r *SeedResolver) Resolve(ctx context.Context, steps []SeedStep, projectRoo
 
 	materials := make([]*SeedMaterial, 0, len(steps))
 	for i, step := range steps {
-		mat, err := r.resolveStep(ctx, step, projectRoot)
+		mat, err := r.resolveStep(step, projectRoot)
 		if err != nil {
 			return nil, fmt.Errorf("seed step %d: %w", i+1, err)
 		}
@@ -57,7 +55,7 @@ func (r *SeedResolver) Resolve(ctx context.Context, steps []SeedStep, projectRoo
 	return materials, nil
 }
 
-func (r *SeedResolver) resolveStep(ctx context.Context, step SeedStep, projectRoot string) (*SeedMaterial, error) {
+func (r *SeedResolver) resolveStep(step SeedStep, projectRoot string) (*SeedMaterial, error) {
 	switch {
 	case step.SQL != "":
 		path := step.SQL
@@ -80,21 +78,6 @@ func (r *SeedResolver) resolveStep(ctx context.Context, step SeedStep, projectRo
 		resolved, err := decompress(path)
 		if err != nil {
 			return nil, fmt.Errorf("decompressing dump: %w", err)
-		}
-		return &SeedMaterial{Kind: SeedDump, DumpPath: resolved}, nil
-
-	case step.S3 != nil:
-		tmpDir, err := os.MkdirTemp("", "previewctl-s3-*")
-		if err != nil {
-			return nil, fmt.Errorf("creating temp dir: %w", err)
-		}
-		destPath := filepath.Join(tmpDir, filepath.Base(step.S3.Key))
-		if err := r.downloader.Download(ctx, step.S3.Bucket, step.S3.Key, destPath); err != nil {
-			return nil, fmt.Errorf("downloading from s3://%s/%s: %w", step.S3.Bucket, step.S3.Key, err)
-		}
-		resolved, err := decompress(destPath)
-		if err != nil {
-			return nil, fmt.Errorf("decompressing s3 download: %w", err)
 		}
 		return &SeedMaterial{Kind: SeedDump, DumpPath: resolved}, nil
 

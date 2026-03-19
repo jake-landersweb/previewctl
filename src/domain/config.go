@@ -51,17 +51,9 @@ type DatabaseModeConfig struct {
 // SeedStep is a single step in the seed pipeline.
 // Exactly one field should be set.
 type SeedStep struct {
-	SQL  string    `yaml:"sql,omitempty"`
-	Dump string    `yaml:"dump,omitempty"`
-	S3   *S3Config `yaml:"s3,omitempty"`
-	Run  string    `yaml:"run,omitempty"`
-}
-
-// S3Config defines an S3 dump source.
-type S3Config struct {
-	Bucket string `yaml:"bucket"`
-	Key    string `yaml:"key"`
-	Region string `yaml:"region"`
+	SQL  string `yaml:"sql,omitempty"`
+	Dump string `yaml:"dump,omitempty"`
+	Run  string `yaml:"run,omitempty"`
 }
 
 // InfrastructureConfig holds infrastructure configuration.
@@ -72,10 +64,19 @@ type InfrastructureConfig struct {
 // ServiceConfig defines an application service.
 type ServiceConfig struct {
 	Path      string            `yaml:"path"`
-	Port      int               `yaml:"port"`
 	Command   string            `yaml:"command,omitempty"`
 	DependsOn []string          `yaml:"depends_on,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
+	EnvFile   string            `yaml:"env_file,omitempty"` // relative to path, defaults to ".env.local"
+}
+
+// ResolvedEnvFile returns the env file path relative to the service path.
+// Defaults to ".env.local" if not configured.
+func (s ServiceConfig) ResolvedEnvFile() string {
+	if s.EnvFile != "" {
+		return s.EnvFile
+	}
+	return ".env.local"
 }
 
 // LocalConfig holds local-mode specific configuration.
@@ -132,9 +133,6 @@ func validateConfig(cfg *ProjectConfig) error {
 		if svc.Path == "" {
 			return fmt.Errorf("config validation: service '%s' requires 'path'", name)
 		}
-		if svc.Port == 0 {
-			return fmt.Errorf("config validation: service '%s' requires 'port'", name)
-		}
 	}
 	for name, db := range cfg.Core.Databases {
 		if db.Engine == "" {
@@ -153,19 +151,3 @@ func validateConfig(cfg *ProjectConfig) error {
 	return nil
 }
 
-// AllBasePorts returns a map of all service, infrastructure, and database names to their base ports.
-func (c *ProjectConfig) AllBasePorts() map[string]int {
-	ports := make(map[string]int)
-	for name, svc := range c.Services {
-		ports[name] = svc.Port
-	}
-	for name, infra := range c.InfraServices {
-		ports[name] = infra.Port
-	}
-	for name, db := range c.Core.Databases {
-		if db.Local != nil {
-			ports[name] = db.Local.Port
-		}
-	}
-	return ports
-}

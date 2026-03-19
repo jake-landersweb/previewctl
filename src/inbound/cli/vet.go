@@ -73,19 +73,10 @@ func newVetCmd() *cobra.Command {
 				)
 			}
 
-			// Show base port range
-			ports := cfg.AllBasePorts()
-			minPort, maxPort := 0, 0
-			for _, p := range ports {
-				if minPort == 0 || p < minPort {
-					minPort = p
-				}
-				if p > maxPort {
-					maxPort = p
-				}
-			}
-			if len(ports) > 0 {
-				KeyValue("Port range", fmt.Sprintf("%d–%d (%d ports)", minPort, maxPort, len(ports)))
+			// Show port allocation info
+			serviceNames := cfg.ServiceNames()
+			if len(serviceNames) > 0 {
+				KeyValue("Port allocation", fmt.Sprintf("%d services, range 61000–65000", len(serviceNames)))
 			}
 
 			Success("Configuration is valid")

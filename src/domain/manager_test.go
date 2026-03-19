@@ -6,13 +6,6 @@ import (
 	"testing"
 )
 
-// noopS3Downloader is a test stub for S3Downloader.
-type noopS3Downloader struct{}
-
-func (noopS3Downloader) Download(_ context.Context, _, _, _ string) error {
-	return fmt.Errorf("s3 not configured")
-}
-
 // mockTracker records the order of operations across all mocks.
 type mockTracker struct {
 	calls []string
@@ -102,9 +95,9 @@ type mockNetworkingPort struct {
 	tracker *mockTracker
 }
 
-func (m *mockNetworkingPort) AllocatePorts(envName string) PortMap {
+func (m *mockNetworkingPort) AllocatePorts(envName string) (PortMap, error) {
 	m.tracker.record("networking.AllocatePorts")
-	return PortMap{"backend": 8042, "web": 3042}
+	return PortMap{"backend": 8042, "web": 3042}, nil
 }
 
 func (m *mockNetworkingPort) GetServiceURL(envName string, service string) (string, error) {
@@ -205,7 +198,7 @@ func newTestManager(tracker *mockTracker) (*Manager, *mockStatePort, *mockProgre
 		EnvGen:     &mockEnvPort{tracker: tracker},
 		State:      statePort,
 		Progress:   progress,
-		SeedResolver: NewSeedResolver(noopS3Downloader{}),
+		SeedResolver: NewSeedResolver(),
 		Config: &ProjectConfig{
 			Name: "myproject",
 			Core: CoreConfig{

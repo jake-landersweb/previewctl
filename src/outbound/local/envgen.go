@@ -24,13 +24,25 @@ func NewEnvGenAdapter(config *domain.ProjectConfig) *EnvGenAdapter {
 }
 
 func (a *EnvGenAdapter) Generate(_ context.Context, envName string, workdir string, ports domain.PortMap, databases map[string]*domain.DatabaseInfo) error {
-	ctx := &domain.TemplateContext{
-		Ports:     ports,
-		Databases: databases,
+	// Split ports into service and infrastructure
+	servicePorts := make(domain.PortMap)
+	infraPorts := make(domain.PortMap)
+	for name, port := range ports {
+		if _, ok := a.config.Services[name]; ok {
+			servicePorts[name] = port
+		} else {
+			infraPorts[name] = port
+		}
 	}
 
-	// Group services by path to combine env vars for services sharing a directory
-	pathEnvs := make(map[string]map[string]string)
+	ctx := &domain.TemplateContext{
+		ServicePorts: servicePorts,
+		InfraPorts:   infraPorts,
+		Databases:    databases,
+	}
+
+	// Group env vars by target file path (service path + env_file)
+	fileEnvs := make(map[string]map[string]string)
 	for _, svc := range a.config.Services {
 		if svc.Env == nil {
 			continue
@@ -39,17 +51,18 @@ func (a *EnvGenAdapter) Generate(_ context.Context, envName string, workdir stri
 		if err != nil {
 			return fmt.Errorf("rendering env for service: %w", err)
 		}
-		if _, ok := pathEnvs[svc.Path]; !ok {
-			pathEnvs[svc.Path] = make(map[string]string)
+		target := filepath.Join(svc.Path, svc.ResolvedEnvFile())
+		if _, ok := fileEnvs[target]; !ok {
+			fileEnvs[target] = make(map[string]string)
 		}
 		for k, v := range rendered {
-			pathEnvs[svc.Path][k] = v
+			fileEnvs[target][k] = v
 		}
 	}
 
-	// Write .env.local for each unique service path
-	for svcPath, envVars := range pathEnvs {
-		envFilePath := filepath.Join(workdir, svcPath, ".env.local")
+	// Write env files
+	for relPath, envVars := range fileEnvs {
+		envFilePath := filepath.Join(workdir, relPath)
 		if err := writeEnvFile(envFilePath, envVars); err != nil {
 			return fmt.Errorf("writing %s: %w", envFilePath, err)
 		}
@@ -130,14 +143,15 @@ func (a *EnvGenAdapter) SymlinkSharedEnvFiles(_ context.Context, workdir string)
 }
 
 func (a *EnvGenAdapter) Cleanup(_ context.Context, workdir string) error {
-	// Remove generated .env.local files
-	paths := make(map[string]bool)
+	// Remove generated env files
+	targets := make(map[string]bool)
 	for _, svc := range a.config.Services {
-		paths[svc.Path] = true
+		target := filepath.Join(svc.Path, svc.ResolvedEnvFile())
+		targets[target] = true
 	}
 
-	for svcPath := range paths {
-		envFilePath := filepath.Join(workdir, svcPath, ".env.local")
+	for relPath := range targets {
+		envFilePath := filepath.Join(workdir, relPath)
 		_ = os.Remove(envFilePath) // ignore errors for missing files
 	}
 

@@ -97,7 +97,11 @@ func (m *Manager) Init(ctx context.Context, envName string, branch string) (*Env
 	// 1. Allocate ports
 	var ports PortMap
 	if err := m.step(ctx, "allocate_ports", "Allocating ports...", msg("Ports allocated"), hctx, func() error {
-		ports = m.networking.AllocatePorts(envName)
+		var err error
+		ports, err = m.networking.AllocatePorts(envName)
+		if err != nil {
+			return err
+		}
 		hctx.Ports = ports
 		return nil
 	}); err != nil {

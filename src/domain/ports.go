@@ -51,7 +51,7 @@ type ComputePort interface {
 // Preview: reverse proxy with subdomain routing (future).
 type NetworkingPort interface {
 	// AllocatePorts returns deterministic port assignments for all services and infrastructure.
-	AllocatePorts(envName string) PortMap
+	AllocatePorts(envName string) (PortMap, error)
 
 	// GetServiceURL returns the URL to reach a named service in the environment.
 	GetServiceURL(envName string, service string) (string, error)
@@ -101,11 +101,6 @@ type ProgressReporter interface {
 type NoopReporter struct{}
 
 func (NoopReporter) OnStep(StepEvent) {}
-
-// S3Downloader downloads objects from S3.
-type S3Downloader interface {
-	Download(ctx context.Context, bucket, key, destPath string) error
-}
 
 // ProvisionerPort manages VM lifecycle for preview/sandbox modes.
 // Not implemented in POC; exists to validate interface design.

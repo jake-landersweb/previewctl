@@ -4,10 +4,12 @@ import "testing"
 
 func testContext() *TemplateContext {
 	return &TemplateContext{
-		Ports: PortMap{
+		ServicePorts: PortMap{
 			"backend": 8042,
 			"web":     3042,
-			"redis":   6421,
+		},
+		InfraPorts: PortMap{
+			"redis": 6421,
 		},
 		Databases: map[string]*DatabaseInfo{
 			"main": {
@@ -22,10 +24,10 @@ func testContext() *TemplateContext {
 	}
 }
 
-func TestRenderTemplate_Ports(t *testing.T) {
+func TestRenderTemplate_ServicePort(t *testing.T) {
 	ctx := testContext()
 
-	result, err := RenderTemplate("http://localhost:{{ports.backend}}/api", ctx)
+	result, err := RenderTemplate("http://localhost:{{services.backend.port}}/api", ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -34,10 +36,22 @@ func TestRenderTemplate_Ports(t *testing.T) {
 	}
 }
 
+func TestRenderTemplate_InfraPort(t *testing.T) {
+	ctx := testContext()
+
+	result, err := RenderTemplate("{{infrastructure.redis.port}}", ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "6421" {
+		t.Errorf("expected '6421', got '%s'", result)
+	}
+}
+
 func TestRenderTemplate_MultiplePorts(t *testing.T) {
 	ctx := testContext()
 
-	result, err := RenderTemplate("{{ports.backend}},{{ports.web}}", ctx)
+	result, err := RenderTemplate("{{services.backend.port}},{{services.web.port}}", ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -84,12 +98,21 @@ func TestRenderTemplate_DatabaseFields(t *testing.T) {
 	}
 }
 
-func TestRenderTemplate_UnknownPort(t *testing.T) {
+func TestRenderTemplate_UnknownService(t *testing.T) {
 	ctx := testContext()
 
-	_, err := RenderTemplate("{{ports.unknown}}", ctx)
+	_, err := RenderTemplate("{{services.unknown.port}}", ctx)
 	if err == nil {
-		t.Fatal("expected error for unknown port")
+		t.Fatal("expected error for unknown service")
+	}
+}
+
+func TestRenderTemplate_UnknownInfra(t *testing.T) {
+	ctx := testContext()
+
+	_, err := RenderTemplate("{{infrastructure.unknown.port}}", ctx)
+	if err == nil {
+		t.Fatal("expected error for unknown infra")
 	}
 }
 
@@ -127,8 +150,9 @@ func TestRenderEnvMap(t *testing.T) {
 	ctx := testContext()
 
 	envMap := map[string]string{
-		"PORT":         "{{ports.backend}}",
+		"PORT":         "{{services.backend.port}}",
 		"DATABASE_URL": "{{core.databases.main.connection_string}}",
+		"REDIS":        "{{infrastructure.redis.port}}",
 		"STATIC":       "no-template-here",
 	}
 
@@ -141,6 +165,9 @@ func TestRenderEnvMap(t *testing.T) {
 	}
 	if result["DATABASE_URL"] != "postgresql://postgres:secret@localhost:5500/wt_feat_auth" {
 		t.Errorf("unexpected DATABASE_URL: %s", result["DATABASE_URL"])
+	}
+	if result["REDIS"] != "6421" {
+		t.Errorf("expected REDIS '6421', got '%s'", result["REDIS"])
 	}
 	if result["STATIC"] != "no-template-here" {
 		t.Errorf("expected STATIC unchanged, got '%s'", result["STATIC"])

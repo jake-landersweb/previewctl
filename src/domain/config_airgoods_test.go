@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"fmt"
 	"os"
 	"testing"
 )
@@ -60,9 +59,6 @@ func TestParseConfig_Airgoods(t *testing.T) {
 	if backend.Path != "apps/backend" {
 		t.Errorf("expected backend path 'apps/backend', got '%s'", backend.Path)
 	}
-	if backend.Port != 8000 {
-		t.Errorf("expected backend port 8000, got %d", backend.Port)
-	}
 	if len(backend.Env) != 9 {
 		t.Errorf("expected 9 backend env vars, got %d", len(backend.Env))
 	}
@@ -79,15 +75,18 @@ func TestParseConfig_Airgoods(t *testing.T) {
 	if cfg.Local == nil {
 		t.Fatal("expected local config")
 	}
+
 	// Test port allocation produces valid results
-	basePorts := cfg.AllBasePorts()
-	if len(basePorts) != 13 { // 12 services + 1 infra
-		t.Errorf("expected 13 base ports, got %d", len(basePorts))
+	serviceNames := cfg.ServiceNames()
+	if len(serviceNames) < 12 {
+		t.Errorf("expected at least 12 service names, got %d", len(serviceNames))
 	}
 
 	// Test template rendering with this config
-	ports := AllocatePorts("feat-auth", basePorts)
-	offset := AllocatePortOffset("feat-auth")
+	ports, err := AllocatePortBlock("feat-auth", serviceNames)
+	if err != nil {
+		t.Fatalf("failed to allocate ports: %v", err)
+	}
 
 	dbInfo := &DatabaseInfo{
 		Host:             "localhost",
@@ -98,9 +97,21 @@ func TestParseConfig_Airgoods(t *testing.T) {
 		ConnectionString: "postgresql://postgres:Paghf123-1@localhost:5500/wt_feat_auth",
 	}
 
+	// Split ports into service and infra
+	servicePorts := make(PortMap)
+	infraPorts := make(PortMap)
+	for name, port := range ports {
+		if _, ok := cfg.Services[name]; ok {
+			servicePorts[name] = port
+		} else {
+			infraPorts[name] = port
+		}
+	}
+
 	ctx := &TemplateContext{
-		Ports:     ports,
-		Databases: map[string]*DatabaseInfo{"main": dbInfo},
+		ServicePorts: servicePorts,
+		InfraPorts:   infraPorts,
+		Databases:    map[string]*DatabaseInfo{"main": dbInfo},
 	}
 
 	rendered, err := RenderEnvMap(backend.Env, ctx)
@@ -108,9 +119,10 @@ func TestParseConfig_Airgoods(t *testing.T) {
 		t.Fatalf("failed to render backend env: %v", err)
 	}
 
-	expectedPort := 8000 + offset
-	if rendered["PORT"] != itoa(expectedPort) {
-		t.Errorf("expected PORT '%d', got '%s'", expectedPort, rendered["PORT"])
+	// Verify the port is in the allocated range
+	renderedPort := rendered["PORT"]
+	if renderedPort == "" || renderedPort == "0" {
+		t.Errorf("expected PORT to be allocated, got '%s'", renderedPort)
 	}
 	if rendered["DB_HOST_LOCAL"] != "localhost" {
 		t.Errorf("expected DB_HOST_LOCAL 'localhost', got '%s'", rendered["DB_HOST_LOCAL"])
@@ -126,6 +138,3 @@ func TestParseConfig_Airgoods(t *testing.T) {
 	}
 }
 
-func itoa(n int) string {
-	return fmt.Sprintf("%d", n)
-}

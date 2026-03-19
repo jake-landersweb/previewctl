@@ -84,8 +84,8 @@ func validateRequired(v *ValidationError, cfg *ProjectConfig) {
 		if svc.Path == "" {
 			v.addf("service '%s': 'path' is required", name)
 		}
-		if svc.Port == 0 {
-			v.addf("service '%s': 'port' is required", name)
+		if svc.EnvFile != "" && filepath.IsAbs(svc.EnvFile) {
+			v.addf("service '%s': env_file must be a relative path, got '%s'", name, svc.EnvFile)
 		}
 	}
 	for name, db := range cfg.Core.Databases {
@@ -118,12 +118,9 @@ func validateRequired(v *ValidationError, cfg *ProjectConfig) {
 }
 
 func validatePortCollisions(v *ValidationError, cfg *ProjectConfig) {
-	// Check base port collisions across services and infrastructure
+	// Check base port collisions across infrastructure and databases
 	portOwners := make(map[int][]string)
 
-	for name, svc := range cfg.Services {
-		portOwners[svc.Port] = append(portOwners[svc.Port], fmt.Sprintf("service '%s'", name))
-	}
 	for name, infra := range cfg.InfraServices {
 		portOwners[infra.Port] = append(portOwners[infra.Port], fmt.Sprintf("infrastructure '%s'", name))
 	}
@@ -173,16 +170,16 @@ func validateDependencyRefs(v *ValidationError, cfg *ProjectConfig) {
 }
 
 func validateTemplateVars(v *ValidationError, cfg *ProjectConfig) {
-	// Build the set of valid port references
-	validPorts := make(map[string]bool)
+	validServices := make(map[string]bool)
 	for name := range cfg.Services {
-		validPorts[name] = true
-	}
-	for name := range cfg.InfraServices {
-		validPorts[name] = true
+		validServices[name] = true
 	}
 
-	// Build the set of valid database references
+	validInfra := make(map[string]bool)
+	for name := range cfg.InfraServices {
+		validInfra[name] = true
+	}
+
 	validDatabases := make(map[string]bool)
 	for name := range cfg.Core.Databases {
 		validDatabases[name] = true
@@ -190,27 +187,32 @@ func validateTemplateVars(v *ValidationError, cfg *ProjectConfig) {
 
 	validDbFields := map[string]bool{
 		"connection_string": true,
-		"host":             true,
-		"port":             true,
-		"user":             true,
-		"password":         true,
-		"database":         true,
+		"host":              true,
+		"port":              true,
+		"user":              true,
+		"password":          true,
+		"database":          true,
 	}
 
 	for svcName, svc := range cfg.Services {
 		for envKey, envVal := range svc.Env {
-			// Find all {{...}} references
 			matches := templateVarPattern.FindAllStringSubmatch(envVal, -1)
 			for _, match := range matches {
 				varPath := strings.TrimSpace(match[1])
 				parts := strings.Split(varPath, ".")
 
 				switch parts[0] {
-				case "ports":
-					if len(parts) != 2 {
-						v.addf("service '%s' env '%s': invalid template var '{{%s}}' — expected {{ports.<name>}}", svcName, envKey, varPath)
-					} else if !validPorts[parts[1]] {
-						v.addf("service '%s' env '%s': references unknown port '{{%s}}' — '%s' is not a defined service or infrastructure", svcName, envKey, varPath, parts[1])
+				case "services":
+					if len(parts) != 3 || parts[2] != "port" {
+						v.addf("service '%s' env '%s': invalid template var '{{%s}}' — expected {{services.<name>.port}}", svcName, envKey, varPath)
+					} else if !validServices[parts[1]] {
+						v.addf("service '%s' env '%s': references unknown service '%s' in '{{%s}}'", svcName, envKey, parts[1], varPath)
+					}
+				case "infrastructure":
+					if len(parts) != 3 || parts[2] != "port" {
+						v.addf("service '%s' env '%s': invalid template var '{{%s}}' — expected {{infrastructure.<name>.port}}", svcName, envKey, varPath)
+					} else if !validInfra[parts[1]] {
+						v.addf("service '%s' env '%s': references unknown infrastructure '%s' in '{{%s}}'", svcName, envKey, parts[1], varPath)
 					}
 				case "core":
 					if len(parts) < 4 {
@@ -255,25 +257,14 @@ func validateSeedConfig(v *ValidationError, cfg *ProjectConfig) {
 			if step.Dump != "" {
 				fieldsSet++
 			}
-			if step.S3 != nil {
-				fieldsSet++
-			}
 			if step.Run != "" {
 				fieldsSet++
 			}
 			if fieldsSet == 0 {
-				v.addf("database '%s': seed[%d] must have exactly one field set (sql, dump, s3, or run)", name, i)
+				v.addf("database '%s': seed[%d] must have exactly one field set (sql, dump, or run)", name, i)
 			}
 			if fieldsSet > 1 {
 				v.addf("database '%s': seed[%d] must have exactly one field set, got %d", name, i, fieldsSet)
-			}
-			if step.S3 != nil {
-				if step.S3.Bucket == "" {
-					v.addf("database '%s': seed[%d].s3 'bucket' is required", name, i)
-				}
-				if step.S3.Key == "" {
-					v.addf("database '%s': seed[%d].s3 'key' is required", name, i)
-				}
 			}
 		}
 	}
@@ -299,11 +290,21 @@ func validateFilePaths(v *ValidationError, cfg *ProjectConfig, projectRoot strin
 		}
 	}
 
-	// Service paths
+	// Service paths and env_file path escape checks
 	for name, svc := range cfg.Services {
 		path := filepath.Join(projectRoot, svc.Path)
 		if !fileExists(path) {
 			v.addf("service '%s': path not found: %s", name, path)
+		}
+		if svc.EnvFile != "" {
+			envFilePath := filepath.Join(projectRoot, svc.Path, svc.EnvFile)
+			resolved, err := filepath.Abs(envFilePath)
+			if err == nil {
+				absRoot, _ := filepath.Abs(projectRoot)
+				if !strings.HasPrefix(resolved, absRoot+string(filepath.Separator)) && resolved != absRoot {
+					v.addf("service '%s': env_file '%s' resolves outside the project root", name, svc.EnvFile)
+				}
+			}
 		}
 	}
 
@@ -329,6 +330,19 @@ func validateFilePaths(v *ValidationError, cfg *ProjectConfig, projectRoot strin
 				}
 				if !fileExists(path) {
 					v.addf("database '%s': seed[%d].dump file not found: %s", name, i, path)
+				}
+			}
+			if step.Run != "" {
+				// If the command looks like a script path, validate it exists
+				cmd := strings.Fields(step.Run)[0]
+				if strings.HasPrefix(cmd, "./") || strings.HasPrefix(cmd, "/") || strings.Contains(cmd, string(filepath.Separator)) {
+					path := cmd
+					if !filepath.IsAbs(path) {
+						path = filepath.Join(projectRoot, path)
+					}
+					if !fileExists(path) {
+						v.addf("database '%s': seed[%d].run script not found: %s", name, i, path)
+					}
 				}
 			}
 		}

@@ -9,20 +9,12 @@ import (
 	"testing"
 )
 
-type mockS3Downloader struct {
-	data []byte
-}
-
-func (m *mockS3Downloader) Download(_ context.Context, _, _, destPath string) error {
-	return os.WriteFile(destPath, m.data, 0o644)
-}
-
 func TestSeedResolver_SQL(t *testing.T) {
 	dir := t.TempDir()
 	sqlFile := filepath.Join(dir, "seed.sql")
 	_ = os.WriteFile(sqlFile, []byte("CREATE TABLE t(id int);"), 0o644)
 
-	resolver := NewSeedResolver(noopS3Downloader{})
+	resolver := NewSeedResolver()
 	materials, err := resolver.Resolve(context.Background(), []SeedStep{
 		{SQL: sqlFile},
 	}, dir)
@@ -44,7 +36,7 @@ func TestSeedResolver_SQL_Relative(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "schema.sql"), []byte("SELECT 1;"), 0o644)
 
-	resolver := NewSeedResolver(noopS3Downloader{})
+	resolver := NewSeedResolver()
 	materials, err := resolver.Resolve(context.Background(), []SeedStep{
 		{SQL: "schema.sql"},
 	}, dir)
@@ -57,7 +49,7 @@ func TestSeedResolver_SQL_Relative(t *testing.T) {
 }
 
 func TestSeedResolver_SQL_NotFound(t *testing.T) {
-	resolver := NewSeedResolver(noopS3Downloader{})
+	resolver := NewSeedResolver()
 	_, err := resolver.Resolve(context.Background(), []SeedStep{
 		{SQL: "/nonexistent/file.sql"},
 	}, "/tmp")
@@ -71,7 +63,7 @@ func TestSeedResolver_Dump(t *testing.T) {
 	dumpFile := filepath.Join(dir, "data.dump")
 	_ = os.WriteFile(dumpFile, []byte("fake dump"), 0o644)
 
-	resolver := NewSeedResolver(noopS3Downloader{})
+	resolver := NewSeedResolver()
 	materials, err := resolver.Resolve(context.Background(), []SeedStep{
 		{Dump: dumpFile},
 	}, dir)
@@ -97,7 +89,7 @@ func TestSeedResolver_DumpGz(t *testing.T) {
 	_ = gz.Close()
 	_ = f.Close()
 
-	resolver := NewSeedResolver(noopS3Downloader{})
+	resolver := NewSeedResolver()
 	materials, err := resolver.Resolve(context.Background(), []SeedStep{
 		{Dump: gzPath},
 	}, dir)
@@ -139,7 +131,7 @@ func TestSeedResolver_DumpTarGz(t *testing.T) {
 	_ = gz.Close()
 	_ = f.Close()
 
-	resolver := NewSeedResolver(noopS3Downloader{})
+	resolver := NewSeedResolver()
 	materials, err := resolver.Resolve(context.Background(), []SeedStep{
 		{Dump: tarGzPath},
 	}, dir)
@@ -157,7 +149,7 @@ func TestSeedResolver_DumpTarGz(t *testing.T) {
 }
 
 func TestSeedResolver_Run(t *testing.T) {
-	resolver := NewSeedResolver(noopS3Downloader{})
+	resolver := NewSeedResolver()
 	materials, err := resolver.Resolve(context.Background(), []SeedStep{
 		{Run: "echo hello"},
 	}, "/tmp")
@@ -172,37 +164,12 @@ func TestSeedResolver_Run(t *testing.T) {
 	}
 }
 
-func TestSeedResolver_S3(t *testing.T) {
-	dumpData := []byte("s3 dump content")
-	downloader := &mockS3Downloader{data: dumpData}
-
-	resolver := NewSeedResolver(downloader)
-	materials, err := resolver.Resolve(context.Background(), []SeedStep{
-		{S3: &S3Config{Bucket: "my-bucket", Key: "dumps/latest.dump", Region: "us-east-1"}},
-	}, "/tmp")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if materials[0].Kind != SeedDump {
-		t.Errorf("expected SeedDump, got %s", materials[0].Kind)
-	}
-
-	// Verify content was downloaded
-	data, err := os.ReadFile(materials[0].DumpPath)
-	if err != nil {
-		t.Fatalf("reading downloaded file: %v", err)
-	}
-	if string(data) != "s3 dump content" {
-		t.Errorf("unexpected content: %s", string(data))
-	}
-}
-
 func TestSeedResolver_Pipeline(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "schema.sql"), []byte("CREATE TABLE t(id int);"), 0o644)
 	_ = os.WriteFile(filepath.Join(dir, "data.dump"), []byte("fake dump"), 0o644)
 
-	resolver := NewSeedResolver(noopS3Downloader{})
+	resolver := NewSeedResolver()
 	materials, err := resolver.Resolve(context.Background(), []SeedStep{
 		{SQL: "schema.sql"},
 		{Dump: "data.dump"},
@@ -226,7 +193,7 @@ func TestSeedResolver_Pipeline(t *testing.T) {
 }
 
 func TestSeedResolver_Empty(t *testing.T) {
-	resolver := NewSeedResolver(noopS3Downloader{})
+	resolver := NewSeedResolver()
 	materials, err := resolver.Resolve(context.Background(), nil, "/tmp")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

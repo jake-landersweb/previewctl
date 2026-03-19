@@ -21,18 +21,16 @@ func TestEnvGenAdapter_Generate(t *testing.T) {
 		Services: map[string]domain.ServiceConfig{
 			"backend": {
 				Path: "apps/backend",
-				Port: 8000,
-				Env: map[string]string{
-					"PORT":         "{{ports.backend}}",
+					Env: map[string]string{
+					"PORT":         "{{services.backend.port}}",
 					"DATABASE_URL": "{{core.databases.main.connection_string}}",
 				},
 			},
 			"web": {
 				Path: "apps/web",
-				Port: 3000,
-				Env: map[string]string{
-					"PORT":    "{{ports.web}}",
-					"API_URL": "http://localhost:{{ports.backend}}",
+					Env: map[string]string{
+					"PORT":    "{{services.web.port}}",
+					"API_URL": "http://localhost:{{services.backend.port}}",
 				},
 			},
 		},
@@ -93,13 +91,11 @@ func TestEnvGenAdapter_Generate_SharedPath(t *testing.T) {
 		Services: map[string]domain.ServiceConfig{
 			"backend": {
 				Path: "apps/backend",
-				Port: 8000,
-				Env:  map[string]string{"PORT": "{{ports.backend}}"},
+					Env:  map[string]string{"PORT": "{{services.backend.port}}"},
 			},
 			"queue": {
 				Path: "apps/backend",
-				Port: 8001,
-				Env:  map[string]string{"QUEUE_PORT": "{{ports.queue}}"},
+					Env:  map[string]string{"QUEUE_PORT": "{{services.queue.port}}"},
 			},
 		},
 	}
@@ -133,7 +129,7 @@ func TestEnvGenAdapter_Cleanup(t *testing.T) {
 
 	cfg := &domain.ProjectConfig{
 		Services: map[string]domain.ServiceConfig{
-			"backend": {Path: "apps/backend", Port: 8000},
+			"backend": {Path: "apps/backend"},
 		},
 	}
 
@@ -153,7 +149,7 @@ func TestEnvGenAdapter_Generate_NoEnv(t *testing.T) {
 
 	cfg := &domain.ProjectConfig{
 		Services: map[string]domain.ServiceConfig{
-			"backend": {Path: "apps/backend", Port: 8000},
+			"backend": {Path: "apps/backend"},
 		},
 	}
 
