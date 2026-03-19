@@ -8,18 +8,14 @@ func TestParseConfig_Valid(t *testing.T) {
 	yaml := []byte(`
 version: 1
 name: myproject
-package_manager: pnpm
 
 core:
-  databases:
+  services:
     main:
-      engine: postgres
-      local:
-        image: postgres:16
-        port: 5500
-        user: postgres
-        password: postgres
-        template_db: dev_template
+      outputs: [connection_string, host, port, user, password, database]
+      hooks:
+        init: ./scripts/init-db.sh
+        seed: ./scripts/seed-db.sh
 
 services:
   backend:
@@ -47,24 +43,18 @@ local:
 	if cfg.Name != "myproject" {
 		t.Errorf("expected name 'myproject', got '%s'", cfg.Name)
 	}
-	if cfg.PackageManager != "pnpm" {
-		t.Errorf("expected packageManager 'pnpm', got '%s'", cfg.PackageManager)
+	if len(cfg.Core.Services) != 1 {
+		t.Fatalf("expected 1 core service, got %d", len(cfg.Core.Services))
 	}
-	if len(cfg.Core.Databases) != 1 {
-		t.Fatalf("expected 1 database, got %d", len(cfg.Core.Databases))
+	svc := cfg.Core.Services["main"]
+	if len(svc.Outputs) != 6 {
+		t.Errorf("expected 6 outputs, got %d", len(svc.Outputs))
 	}
-	db := cfg.Core.Databases["main"]
-	if db.Engine != "postgres" {
-		t.Errorf("expected engine 'postgres', got '%s'", db.Engine)
+	if svc.Hooks == nil {
+		t.Fatal("expected hooks config")
 	}
-	if db.Local == nil {
-		t.Fatal("expected local config")
-	}
-	if db.Local.Port != 5500 {
-		t.Errorf("expected port 5500, got %d", db.Local.Port)
-	}
-	if db.Local.TemplateDb != "dev_template" {
-		t.Errorf("expected templateDb 'dev_template', got '%s'", db.Local.TemplateDb)
+	if svc.Hooks.Init != "./scripts/init-db.sh" {
+		t.Errorf("expected init hook, got '%s'", svc.Hooks.Init)
 	}
 
 	if len(cfg.Services) != 2 {
@@ -126,40 +116,29 @@ services:
 	}
 }
 
-func TestParseConfig_DatabaseMissingEngine(t *testing.T) {
+func TestParseConfig_CoreServiceMissingOutputs(t *testing.T) {
 	yaml := []byte(`
 version: 1
 name: myproject
 core:
-  databases:
+  services:
     main:
-      local:
-        image: postgres:16
-        port: 5500
+      hooks:
+        init: ./init.sh
 services:
   backend:
     path: apps/backend
 `)
 	_, err := ParseConfig(yaml)
 	if err == nil {
-		t.Fatal("expected error for database missing engine")
+		t.Fatal("expected error for core service missing outputs")
 	}
 }
 
-func TestParseConfig_OptionalSeed(t *testing.T) {
+func TestParseConfig_NoCoreServices(t *testing.T) {
 	yaml := []byte(`
 version: 1
 name: myproject
-core:
-  databases:
-    main:
-      engine: postgres
-      local:
-        image: postgres:16
-        port: 5500
-        user: postgres
-        password: postgres
-        template_db: dev_template
 services:
   backend:
     path: apps/backend
@@ -168,45 +147,7 @@ services:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Core.Databases["main"].Local.Seed) != 0 {
-		t.Error("expected empty seed config")
+	if len(cfg.Core.Services) != 0 {
+		t.Error("expected no core services")
 	}
 }
-
-func TestParseConfig_WithSeed(t *testing.T) {
-	yaml := []byte(`
-version: 1
-name: myproject
-core:
-  databases:
-    main:
-      engine: postgres
-      local:
-        image: postgres:16
-        port: 5500
-        user: postgres
-        password: postgres
-        template_db: dev_template
-        seed:
-          - sql: schema.sql
-          - run: npm run migrate
-services:
-  backend:
-    path: apps/backend
-`)
-	cfg, err := ParseConfig(yaml)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	seed := cfg.Core.Databases["main"].Local.Seed
-	if len(seed) != 2 {
-		t.Fatalf("expected 2 seed steps, got %d", len(seed))
-	}
-	if seed[0].SQL != "schema.sql" {
-		t.Errorf("expected first step sql 'schema.sql', got '%s'", seed[0].SQL)
-	}
-	if seed[1].Run != "npm run migrate" {
-		t.Errorf("expected second step run 'npm run migrate', got '%s'", seed[1].Run)
-	}
-}
-

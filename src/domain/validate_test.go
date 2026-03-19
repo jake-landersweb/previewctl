@@ -10,8 +10,8 @@ func TestValidateConfig_Valid(t *testing.T) {
 		Version: 1,
 		Name:    "myproject",
 		Core: CoreConfig{
-			Databases: map[string]DatabaseConfig{
-				"main": {Engine: "postgres", Local: &DatabaseModeConfig{Image: "postgres:16", Port: 5500, User: "postgres", Password: "pass", TemplateDb: "dev_template"}},
+			Services: map[string]CoreServiceConfig{
+				"main": {Outputs: []string{"connection_string", "host", "port", "user", "password", "database"}},
 			},
 		},
 		InfraServices: map[string]InfraService{
@@ -20,7 +20,7 @@ func TestValidateConfig_Valid(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"backend": {Path: "apps/backend", DependsOn: []string{"redis"}, Env: map[string]string{
 				"PORT":         "{{services.backend.port}}",
-				"DATABASE_URL": "{{core.databases.main.connection_string}}",
+				"DATABASE_URL": "{{core.main.connection_string}}",
 				"REDIS":        "redis://localhost:{{infrastructure.redis.port}}",
 			}},
 			"web": {Path: "apps/web", DependsOn: []string{"backend"}, Env: map[string]string{
@@ -38,34 +38,9 @@ func TestValidateConfig_PortCollisions(t *testing.T) {
 	cfg := &ProjectConfig{
 		Version: 1,
 		Name:    "test",
-		Core: CoreConfig{
-			Databases: map[string]DatabaseConfig{
-				"db1": {Engine: "postgres", Local: &DatabaseModeConfig{Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t"}},
-				"db2": {Engine: "postgres", Local: &DatabaseModeConfig{Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t2"}},
-			},
-		},
-	}
-
-	err := ValidateConfig(cfg)
-	if err == nil {
-		t.Fatal("expected port collision error")
-	}
-	if !strings.Contains(err.Error(), "base port 5500") {
-		t.Errorf("expected port collision message, got: %v", err)
-	}
-}
-
-func TestValidateConfig_PortCollisionAcrossTypes(t *testing.T) {
-	cfg := &ProjectConfig{
-		Version: 1,
-		Name:    "test",
 		InfraServices: map[string]InfraService{
-			"redis": {Name: "redis", Image: "redis", Port: 5500},
-		},
-		Core: CoreConfig{
-			Databases: map[string]DatabaseConfig{
-				"main": {Engine: "postgres", Local: &DatabaseModeConfig{Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t"}},
-			},
+			"redis1": {Name: "redis1", Image: "redis", Port: 6379},
+			"redis2": {Name: "redis2", Image: "redis", Port: 6379},
 		},
 	}
 
@@ -73,8 +48,8 @@ func TestValidateConfig_PortCollisionAcrossTypes(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected port collision error")
 	}
-	if !strings.Contains(err.Error(), "base port 5500") {
-		t.Errorf("expected cross-type collision, got: %v", err)
+	if !strings.Contains(err.Error(), "base port 6379") {
+		t.Errorf("expected port collision message, got: %v", err)
 	}
 }
 
@@ -142,9 +117,8 @@ func TestValidateConfig_InvalidTemplateVar(t *testing.T) {
 		{"unknown namespace", "{{foo.bar}}", "unknown template namespace"},
 		{"unknown service", "{{services.nonexistent.port}}", "unknown service"},
 		{"unknown infra", "{{infrastructure.nonexistent.port}}", "unknown infrastructure"},
-		{"unknown database", "{{core.databases.nope.host}}", "unknown database"},
-		{"unknown db field", "{{core.databases.main.nope}}", "unknown database field"},
-		{"bad core type", "{{core.caches.main.host}}", "unknown core type"},
+		{"unknown core service", "{{core.nope.host}}", "unknown core service"},
+		{"unknown core output", "{{core.main.nope}}", "unknown output"},
 		{"malformed services", "{{services.backend}}", "expected {{services.<name>.port}}"},
 	}
 
@@ -154,8 +128,8 @@ func TestValidateConfig_InvalidTemplateVar(t *testing.T) {
 				Version: 1,
 				Name:    "test",
 				Core: CoreConfig{
-					Databases: map[string]DatabaseConfig{
-						"main": {Engine: "postgres", Local: &DatabaseModeConfig{Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t"}},
+					Services: map[string]CoreServiceConfig{
+						"main": {Outputs: []string{"host", "port", "connection_string"}},
 					},
 				},
 				Services: map[string]ServiceConfig{
@@ -173,56 +147,6 @@ func TestValidateConfig_InvalidTemplateVar(t *testing.T) {
 		})
 	}
 }
-
-func TestValidateConfig_UnsupportedEngine(t *testing.T) {
-	cfg := &ProjectConfig{
-		Version: 1,
-		Name:    "test",
-		Core: CoreConfig{
-			Databases: map[string]DatabaseConfig{
-				"main": {Engine: "mysql", Local: &DatabaseModeConfig{Image: "mysql:8", Port: 3306, User: "root", Password: "pass", TemplateDb: "tmpl"}},
-			},
-		},
-		Services: map[string]ServiceConfig{
-			"svc": {Path: "svc"},
-		},
-	}
-
-	err := ValidateConfig(cfg)
-	if err == nil {
-		t.Fatal("expected unsupported engine error")
-	}
-	if !strings.Contains(err.Error(), "unsupported engine 'mysql'") {
-		t.Errorf("expected engine message, got: %v", err)
-	}
-}
-
-func TestValidateConfig_SeedPipelineMultipleFields(t *testing.T) {
-	cfg := &ProjectConfig{
-		Version: 1,
-		Name:    "test",
-		Core: CoreConfig{
-			Databases: map[string]DatabaseConfig{
-				"main": {Engine: "postgres", Local: &DatabaseModeConfig{Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t",
-					Seed: []SeedStep{{SQL: "schema.sql", Dump: "data.dump"}},
-				}},
-			},
-		},
-		Services: map[string]ServiceConfig{
-			"svc": {Path: "svc"},
-		},
-	}
-
-	err := ValidateConfig(cfg)
-	if err == nil {
-		t.Fatal("expected error for seed step with multiple fields")
-	}
-	if !strings.Contains(err.Error(), "exactly one field set") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-
 
 func TestValidateConfig_MultipleErrors(t *testing.T) {
 	cfg := &ProjectConfig{} // empty — should have many errors

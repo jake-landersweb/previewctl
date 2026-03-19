@@ -116,14 +116,14 @@ func TestHookRunner_EnvironmentVariables(t *testing.T) {
 		ProjectRoot:  "/project",
 		WorktreePath: tmpDir, // use real dir so hook can chdir
 		Ports:        PortMap{"backend": 8042, "redis": 6421},
-		Databases: map[string]*DatabaseInfo{
+		CoreOutputs: map[string]map[string]string{
 			"main": {
-				Host:             "localhost",
-				Port:             5500,
-				User:             "postgres",
-				Password:         "secret",
-				Database:         "wt_feat_auth",
-				ConnectionString: "postgresql://postgres:secret@localhost:5500/wt_feat_auth",
+				"host":     "localhost",
+				"port":     "5500",
+				"user":     "postgres",
+				"password": "secret",
+				"database": "wt_feat_auth",
+				"url":      "postgresql://postgres:secret@localhost:5500/wt_feat_auth",
 			},
 		},
 	}
@@ -146,11 +146,11 @@ func TestHookRunner_EnvironmentVariables(t *testing.T) {
 		"PREVIEWCTL_WORKTREE_PATH=" + tmpDir,
 		"PREVIEWCTL_PORT_BACKEND=8042",
 		"PREVIEWCTL_PORT_REDIS=6421",
-		"PREVIEWCTL_DB_MAIN_HOST=localhost",
-		"PREVIEWCTL_DB_MAIN_PORT=5500",
-		"PREVIEWCTL_DB_MAIN_USER=postgres",
-		"PREVIEWCTL_DB_MAIN_NAME=wt_feat_auth",
-		"PREVIEWCTL_DB_MAIN_URL=postgresql://postgres:secret@localhost:5500/wt_feat_auth",
+		"PREVIEWCTL_CORE_MAIN_HOST=localhost",
+		"PREVIEWCTL_CORE_MAIN_PORT=5500",
+		"PREVIEWCTL_CORE_MAIN_USER=postgres",
+		"PREVIEWCTL_CORE_MAIN_DATABASE=wt_feat_auth",
+		"PREVIEWCTL_CORE_MAIN_URL=postgresql://postgres:secret@localhost:5500/wt_feat_auth",
 		"PREVIEWCTL_STEP=test_step",
 		"PREVIEWCTL_PHASE=before",
 	}

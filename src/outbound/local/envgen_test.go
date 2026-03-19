@@ -21,14 +21,14 @@ func TestEnvGenAdapter_Generate(t *testing.T) {
 		Services: map[string]domain.ServiceConfig{
 			"backend": {
 				Path: "apps/backend",
-					Env: map[string]string{
+				Env: map[string]string{
 					"PORT":         "{{services.backend.port}}",
-					"DATABASE_URL": "{{core.databases.main.connection_string}}",
+					"DATABASE_URL": "{{core.main.connection_string}}",
 				},
 			},
 			"web": {
 				Path: "apps/web",
-					Env: map[string]string{
+				Env: map[string]string{
 					"PORT":    "{{services.web.port}}",
 					"API_URL": "http://localhost:{{services.backend.port}}",
 				},
@@ -39,18 +39,18 @@ func TestEnvGenAdapter_Generate(t *testing.T) {
 	adapter := NewEnvGenAdapter(cfg)
 	ctx := context.Background()
 	ports := domain.PortMap{"backend": 8042, "web": 3042}
-	databases := map[string]*domain.DatabaseInfo{
+	coreOutputs := map[string]map[string]string{
 		"main": {
-			Host:             "localhost",
-			Port:             5500,
-			User:             "postgres",
-			Password:         "secret",
-			Database:         "wt_test",
-			ConnectionString: "postgresql://postgres:secret@localhost:5500/wt_test",
+			"host":              "localhost",
+			"port":              "5500",
+			"user":              "postgres",
+			"password":          "secret",
+			"database":          "wt_test",
+			"connection_string": "postgresql://postgres:secret@localhost:5500/wt_test",
 		},
 	}
 
-	err := adapter.Generate(ctx, "test-env", workdir, ports, databases)
+	err := adapter.Generate(ctx, "test-env", workdir, ports, coreOutputs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,11 +91,11 @@ func TestEnvGenAdapter_Generate_SharedPath(t *testing.T) {
 		Services: map[string]domain.ServiceConfig{
 			"backend": {
 				Path: "apps/backend",
-					Env:  map[string]string{"PORT": "{{services.backend.port}}"},
+				Env:  map[string]string{"PORT": "{{services.backend.port}}"},
 			},
 			"queue": {
 				Path: "apps/backend",
-					Env:  map[string]string{"QUEUE_PORT": "{{services.queue.port}}"},
+				Env:  map[string]string{"QUEUE_PORT": "{{services.queue.port}}"},
 			},
 		},
 	}

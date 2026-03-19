@@ -51,18 +51,15 @@ func newStatusCmd() *cobra.Command {
 			}
 			KeyValue("Infrastructure", StatusBadge(infraStatus))
 
-			fmt.Fprintln(os.Stderr)
-			SectionHeader("Databases")
-			for name, exists := range detail.DatabaseExists {
-				status := "missing"
-				if exists {
-					status = "exists"
+			// Display core outputs if any
+			if len(e.CoreOutputs) > 0 {
+				fmt.Fprintln(os.Stderr)
+				SectionHeader("Core Outputs")
+				for svcName, outputs := range e.CoreOutputs {
+					for key, val := range outputs {
+						DetailKeyValue(fmt.Sprintf("%s.%s", svcName, key), val)
+					}
 				}
-				dbRef := e.Databases[name]
-				DetailKeyValue(name, fmt.Sprintf("%s  %s",
-					styleDim.Render(dbRef.Name),
-					StatusBadge(status),
-				))
 			}
 
 			fmt.Fprintln(os.Stderr)

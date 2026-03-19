@@ -3,15 +3,12 @@ package cli
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	_ "github.com/lib/pq"
 
 	"github.com/jake-landersweb/previewctl/src/domain"
 	filestate "github.com/jake-landersweb/previewctl/src/outbound/state"
@@ -20,9 +17,8 @@ import (
 
 // orphanedResource describes a resource that will be cleaned up.
 type orphanedResource struct {
-	kind  string // "worktree", "compose", "database"
-	name  string // display name / identifier
-	dbCfg *domain.DatabaseModeConfig // only set for database resources
+	kind string // "worktree", "compose"
+	name string // display name / identifier
 }
 
 func newCleanCmd() *cobra.Command {
@@ -30,11 +26,10 @@ func newCleanCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "clean",
-		Short: "Find and remove dangling resources (worktrees, containers, databases)",
+		Short: "Find and remove dangling resources (worktrees, containers)",
 		Long: `Scans for orphaned resources across all projects managed by previewctl:
   - Git worktrees under ~/.previewctl/worktrees not tracked in state
   - Docker compose projects that are still running for deleted environments
-  - Databases cloned from templates that are no longer tracked
 
 Resources are shown for review before any deletion occurs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -56,7 +51,6 @@ Resources are shown for review before any deletion occurs.`,
 
 			trackedWorktrees := make(map[string]bool)
 			trackedComposeProjects := make(map[string]bool)
-			trackedDatabases := make(map[string]bool)
 			knownProjectNames := make([]string, 0, len(projects))
 			knownProjectNames = append(knownProjectNames, projects...)
 
@@ -75,9 +69,6 @@ Resources are shown for review before any deletion occurs.`,
 						if entry.Local.ComposeProjectName != "" {
 							trackedComposeProjects[entry.Local.ComposeProjectName] = true
 						}
-					}
-					for _, dbRef := range entry.Databases {
-						trackedDatabases[dbRef.Name] = true
 					}
 				}
 			}
@@ -117,36 +108,6 @@ Resources are shown for review before any deletion occurs.`,
 				for _, proj := range orphanedCompose {
 					fmt.Fprintf(os.Stderr, "  %s %s\n", styleSkipped.Render("⚠"), styleMessage.Render(proj))
 					orphaned = append(orphaned, orphanedResource{kind: "compose", name: proj})
-				}
-			}
-			fmt.Fprintln(os.Stderr)
-
-			// Scan databases
-			SectionHeader("Databases")
-			cfg, _, configErr := loadConfig()
-			if configErr != nil {
-				fmt.Fprintf(os.Stderr, "  %s %s\n", styleDim.Render("−"), styleDim.Render("No project config found, skipping database scan"))
-			} else {
-				for dbName, dbCfg := range cfg.Core.Databases {
-					if dbCfg.Engine != "postgres" || dbCfg.Local == nil {
-						continue
-					}
-					spinner = newLiveSpinner(fmt.Sprintf("Scanning %s databases...", dbName))
-					spinner.Start()
-					orphanedDbs := findOrphanedDatabases(*dbCfg.Local, trackedDatabases)
-					spinner.Stop()
-					if len(orphanedDbs) == 0 {
-						fmt.Fprintf(os.Stderr, "  %s %s\n",
-							styleSuccess.Render("✓"),
-							styleDim.Render(fmt.Sprintf("No orphaned databases for %s", dbName)),
-						)
-					} else {
-						for _, db := range orphanedDbs {
-							fmt.Fprintf(os.Stderr, "  %s %s\n", styleSkipped.Render("⚠"), styleMessage.Render(db))
-							modeCfgCopy := *dbCfg.Local
-							orphaned = append(orphaned, orphanedResource{kind: "database", name: db, dbCfg: &modeCfgCopy})
-						}
-					}
 				}
 			}
 
@@ -193,10 +154,6 @@ Resources are shown for review before any deletion occurs.`,
 					removeWorktree(r.name)
 				case "compose":
 					removeComposeProject(r.name)
-				case "database":
-					if r.dbCfg != nil {
-					dropDatabase(*r.dbCfg, r.name)
-				}
 				}
 				s.Stop()
 				cleaned++
@@ -297,37 +254,6 @@ func findOrphanedComposeProjects(tracked map[string]bool, knownProjectNames []st
 	return orphaned
 }
 
-// findOrphanedDatabases queries Postgres for databases matching the wt_ prefix
-// that aren't tracked in state.
-func findOrphanedDatabases(dbCfg domain.DatabaseModeConfig, tracked map[string]bool) []string {
-	dsn := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=postgres sslmode=disable",
-		dbCfg.Port, dbCfg.User, dbCfg.Password)
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil
-	}
-	defer func() { _ = db.Close() }()
-
-	rows, err := db.Query("SELECT datname FROM pg_database WHERE datname LIKE 'wt_%' AND datistemplate = false")
-	if err != nil {
-		return nil
-	}
-	defer func() { _ = rows.Close() }()
-
-	var orphaned []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			continue
-		}
-		if !tracked[name] {
-			orphaned = append(orphaned, name)
-		}
-	}
-
-	return orphaned
-}
-
 func removeWorktree(path string) {
 	cmd := exec.Command("git", "worktree", "remove", path, "--force")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -344,26 +270,5 @@ func removeComposeProject(name string) {
 	} else {
 		_ = out
 		fmt.Fprintf(os.Stderr, "  %s %s\n", styleSuccess.Render("✓"), styleMessage.Render(fmt.Sprintf("Removed compose project %s", name)))
-	}
-}
-
-func dropDatabase(dbCfg domain.DatabaseModeConfig, dbName string) {
-	dsn := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=postgres sslmode=disable",
-		dbCfg.Port, dbCfg.User, dbCfg.Password)
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "  %s %s: %v\n", styleFail.Render("✗"), styleFail.Render(dbName), err)
-		return
-	}
-	defer func() { _ = db.Close() }()
-
-	// Terminate connections first
-	_, _ = db.Exec("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", dbName)
-
-	quoted := `"` + strings.ReplaceAll(dbName, `"`, `""`) + `"`
-	if _, err := db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoted)); err != nil {
-		fmt.Fprintf(os.Stderr, "  %s %s: %v\n", styleFail.Render("✗"), styleFail.Render(dbName), err)
-	} else {
-		fmt.Fprintf(os.Stderr, "  %s %s\n", styleSuccess.Render("✓"), styleMessage.Render(fmt.Sprintf("Dropped database %s", dbName)))
 	}
 }

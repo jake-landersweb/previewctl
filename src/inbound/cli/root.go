@@ -54,20 +54,6 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 		return nil, nil, err
 	}
 
-	// Build database adapters
-	databases := make(map[string]domain.DatabasePort)
-	for name, dbCfg := range cfg.Core.Databases {
-		if dbCfg.Local == nil {
-			return nil, nil, fmt.Errorf("database '%s' has no local config", name)
-		}
-		switch dbCfg.Engine {
-		case "postgres":
-			databases[name] = local.NewPostgresAdapter(name, *dbCfg.Local)
-		default:
-			return nil, nil, fmt.Errorf("unsupported database engine '%s' for '%s'", dbCfg.Engine, name)
-		}
-	}
-
 	// Resolve infrastructure compose file path (already parsed in loadConfig)
 	composeFile := ""
 	if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile != "" {
@@ -79,15 +65,13 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 	statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
 
 	mgr := domain.NewManager(domain.ManagerDeps{
-		Databases:    databases,
-		Compute:      local.NewComputeAdapter(cfg, composeFile),
-		Networking:   local.NewNetworkingAdapter(cfg),
-		EnvGen:       local.NewEnvGenAdapter(cfg),
-		State:        filestate.NewFileStateAdapter(statePath),
-		Progress:     progress,
-		Config:       cfg,
-		ProjectRoot:  projectRoot,
-		SeedResolver: domain.NewSeedResolver(),
+		Compute:     local.NewComputeAdapter(cfg, composeFile),
+		Networking:  local.NewNetworkingAdapter(cfg),
+		EnvGen:      local.NewEnvGenAdapter(cfg),
+		State:       filestate.NewFileStateAdapter(statePath),
+		Progress:    progress,
+		Config:      cfg,
+		ProjectRoot: projectRoot,
 	})
 
 	return mgr, cfg, nil
@@ -105,7 +89,7 @@ func loadConfig() (*domain.ProjectConfig, string, error) {
 	for {
 		path := filepath.Join(dir, configFileName)
 		if _, err := os.Stat(path); err == nil {
-			cfg, err := domain.LoadConfig(path)
+			cfg, err := domain.LoadConfigWithOverlay(path, "local")
 			if err != nil {
 				return nil, "", err
 			}

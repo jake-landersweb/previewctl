@@ -61,22 +61,11 @@ Create a `previewctl.yaml` in your project root:
 ```yaml
 version: 1
 name: myproject
-package_manager: pnpm  # optional
 
 core:
-  databases:
-    main:
-      engine: postgres
-      local:
-        provider: docker
-        image: postgres:16
-        port: 5432
-        user: postgres
-        password: postgres
-        template_db: template_db
-        seed:
-          - sql: schema/seed.sql
-          - run: npm run migrate
+  services:
+    postgres:
+      outputs: [CONNECTION_STRING, DB_HOST, DB_PORT]
 
 infrastructure:
   compose_file: compose.worktree.yaml
@@ -88,7 +77,7 @@ services:
     depends_on: [redis]
     env:
       PORT: "{{services.backend.port}}"
-      DATABASE_URL: "{{core.databases.main.connection_string}}"
+      DATABASE_URL: "{{core.postgres.CONNECTION_STRING}}"
       REDIS_PORT: "{{infrastructure.redis.port}}"
 
   web:
@@ -116,18 +105,26 @@ Use these in service `env` values:
 |---|---|
 | `{{services.<name>.port}}` | Allocated port for an application service |
 | `{{infrastructure.<name>.port}}` | Allocated port for an infrastructure service |
-| `{{core.databases.<name>.connection_string}}` | Database connection string |
-| `{{core.databases.<name>.host}}` | Database host |
-| `{{core.databases.<name>.port}}` | Database port |
-| `{{core.databases.<name>.user}}` | Database user |
-| `{{core.databases.<name>.password}}` | Database password |
-| `{{core.databases.<name>.database}}` | Database name |
+| `{{core.<service>.<OUTPUT>}}` | Output from a core service hook (e.g., `{{core.postgres.CONNECTION_STRING}}`) |
+
+### Core services
+
+Core services are long-lived services (databases, caches, etc.) managed via lifecycle hooks. Declare outputs in `previewctl.yaml`, define hooks in overlay files (`previewctl.local.yaml`, `previewctl.remote.yaml`).
+
+Hooks write `KEY=VALUE` pairs to stdout. Outputs are validated against the declared list and made available as template variables.
+
+| Hook | When | Example |
+|------|------|---------|
+| `init` | `previewctl core <name> init` | Create template DB |
+| `seed` | During `previewctl create` | Clone from template |
+| `reset` | `previewctl core <name> reset [env]` | Drop + re-clone |
+| `destroy` | During `previewctl delete` | Drop database |
 
 ### Hooks
 
-Hooks can be attached to any lifecycle step: `allocate_ports`, `create_compute`, `ensure_database`, `clone_database`, `symlink_env`, `generate_env`, `start_infra`, `save_state`, and top-level `create`/`delete`/`reset`.
+Hooks can be attached to lifecycle steps: `allocate_ports`, `create_compute`, `symlink_env`, `generate_env`, `start_infra`, `save_state`, and top-level `create`/`delete`.
 
-Scripts receive context via environment variables: `PREVIEWCTL_ENV_NAME`, `PREVIEWCTL_BRANCH`, `PREVIEWCTL_WORKTREE_PATH`, `PREVIEWCTL_STEP`, `PREVIEWCTL_PHASE`, plus port and database info as JSON.
+Scripts receive context via environment variables: `PREVIEWCTL_ENV_NAME`, `PREVIEWCTL_BRANCH`, `PREVIEWCTL_WORKTREE_PATH`, `PREVIEWCTL_STEP`, `PREVIEWCTL_PHASE`, plus port and core output info.
 
 ## How it works
 

@@ -73,17 +73,12 @@ func isPortFree(port int) bool {
 // ServiceNames returns a sorted list of all service and infrastructure names
 // that need port assignments.
 func (c *ProjectConfig) ServiceNames() []string {
-	names := make([]string, 0, len(c.Services)+len(c.InfraServices)+len(c.Core.Databases))
+	names := make([]string, 0, len(c.Services)+len(c.InfraServices))
 	for name := range c.Services {
 		names = append(names, name)
 	}
 	for name := range c.InfraServices {
 		names = append(names, name)
-	}
-	for name, db := range c.Core.Databases {
-		if db.Local != nil && db.Local.Port > 0 {
-			names = append(names, name)
-		}
 	}
 	sort.Strings(names)
 	return names

@@ -11,14 +11,14 @@ func testContext() *TemplateContext {
 		InfraPorts: PortMap{
 			"redis": 6421,
 		},
-		Databases: map[string]*DatabaseInfo{
+		CoreOutputs: map[string]map[string]string{
 			"main": {
-				Host:             "localhost",
-				Port:             5500,
-				User:             "postgres",
-				Password:         "secret",
-				Database:         "wt_feat_auth",
-				ConnectionString: "postgresql://postgres:secret@localhost:5500/wt_feat_auth",
+				"host":              "localhost",
+				"port":              "5500",
+				"user":              "postgres",
+				"password":          "secret",
+				"database":          "wt_feat_auth",
+				"connection_string": "postgresql://postgres:secret@localhost:5500/wt_feat_auth",
 			},
 		},
 	}
@@ -60,10 +60,10 @@ func TestRenderTemplate_MultiplePorts(t *testing.T) {
 	}
 }
 
-func TestRenderTemplate_DatabaseConnectionString(t *testing.T) {
+func TestRenderTemplate_CoreOutput(t *testing.T) {
 	ctx := testContext()
 
-	result, err := RenderTemplate("{{core.databases.main.connection_string}}", ctx)
+	result, err := RenderTemplate("{{core.main.connection_string}}", ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -72,18 +72,18 @@ func TestRenderTemplate_DatabaseConnectionString(t *testing.T) {
 	}
 }
 
-func TestRenderTemplate_DatabaseFields(t *testing.T) {
+func TestRenderTemplate_CoreOutputFields(t *testing.T) {
 	ctx := testContext()
 
 	tests := []struct {
 		tmpl     string
 		expected string
 	}{
-		{"{{core.databases.main.host}}", "localhost"},
-		{"{{core.databases.main.port}}", "5500"},
-		{"{{core.databases.main.user}}", "postgres"},
-		{"{{core.databases.main.password}}", "secret"},
-		{"{{core.databases.main.database}}", "wt_feat_auth"},
+		{"{{core.main.host}}", "localhost"},
+		{"{{core.main.port}}", "5500"},
+		{"{{core.main.user}}", "postgres"},
+		{"{{core.main.password}}", "secret"},
+		{"{{core.main.database}}", "wt_feat_auth"},
 	}
 
 	for _, tt := range tests {
@@ -116,12 +116,12 @@ func TestRenderTemplate_UnknownInfra(t *testing.T) {
 	}
 }
 
-func TestRenderTemplate_UnknownDatabase(t *testing.T) {
+func TestRenderTemplate_UnknownCoreService(t *testing.T) {
 	ctx := testContext()
 
-	_, err := RenderTemplate("{{core.databases.unknown.host}}", ctx)
+	_, err := RenderTemplate("{{core.unknown.host}}", ctx)
 	if err == nil {
-		t.Fatal("expected error for unknown database")
+		t.Fatal("expected error for unknown core service")
 	}
 }
 
@@ -151,7 +151,7 @@ func TestRenderEnvMap(t *testing.T) {
 
 	envMap := map[string]string{
 		"PORT":         "{{services.backend.port}}",
-		"DATABASE_URL": "{{core.databases.main.connection_string}}",
+		"DATABASE_URL": "{{core.main.connection_string}}",
 		"REDIS":        "{{infrastructure.redis.port}}",
 		"STATIC":       "no-template-here",
 	}
@@ -171,5 +171,60 @@ func TestRenderEnvMap(t *testing.T) {
 	}
 	if result["STATIC"] != "no-template-here" {
 		t.Errorf("expected STATIC unchanged, got '%s'", result["STATIC"])
+	}
+}
+
+func TestRenderTemplate_SelfPort(t *testing.T) {
+	ctx := testContext()
+	ctx.CurrentService = "backend"
+
+	result, err := RenderTemplate("{{self.port}}", ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "8042" {
+		t.Errorf("expected '8042', got '%s'", result)
+	}
+}
+
+func TestRenderTemplate_SelfPortMixed(t *testing.T) {
+	ctx := testContext()
+	ctx.CurrentService = "backend"
+
+	result, err := RenderTemplate("http://localhost:{{self.port}}/api?redis={{infrastructure.redis.port}}", ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "http://localhost:8042/api?redis=6421" {
+		t.Errorf("unexpected: %s", result)
+	}
+}
+
+func TestRenderTemplate_SelfPortWithoutCurrentService(t *testing.T) {
+	ctx := testContext()
+	// CurrentService not set
+
+	_, err := RenderTemplate("{{self.port}}", ctx)
+	if err == nil {
+		t.Fatal("expected error for self.port without current service")
+	}
+}
+
+func TestRenderTemplate_SelfInvalidField(t *testing.T) {
+	ctx := testContext()
+	ctx.CurrentService = "backend"
+
+	_, err := RenderTemplate("{{self.name}}", ctx)
+	if err == nil {
+		t.Fatal("expected error for self.name (only self.port is valid)")
+	}
+}
+
+func TestRenderTemplate_UnknownCoreOutput(t *testing.T) {
+	ctx := testContext()
+
+	_, err := RenderTemplate("{{core.main.nonexistent}}", ctx)
+	if err == nil {
+		t.Fatal("expected error for unknown core output")
 	}
 }

@@ -47,15 +47,6 @@ func (a *ComputeAdapter) Create(ctx context.Context, envName string, branch stri
 	cmd.Dir = worktreePath
 	_, _ = cmd.CombinedOutput() // ignore errors if no submodules
 
-	// Install dependencies if package manager is configured
-	if a.config.PackageManager != "" {
-		cmd = exec.CommandContext(ctx, a.config.PackageManager, "install")
-		cmd.Dir = worktreePath
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("installing dependencies: %s", string(out))
-		}
-	}
-
 	return &domain.ComputeResources{
 		WorktreePath: worktreePath,
 	}, nil
@@ -101,10 +92,14 @@ func (a *ComputeAdapter) Destroy(ctx context.Context, envName string) error {
 		}
 	}
 
-	// Remove worktree
+	// Remove worktree (ignore errors if already gone)
 	worktreePath := filepath.Join(a.worktreeBase, a.config.Name, envName)
 	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", worktreePath, "--force")
 	if out, err := cmd.CombinedOutput(); err != nil {
+		// If the worktree doesn't exist, that's fine — it may have been manually removed
+		if _, statErr := os.Stat(worktreePath); os.IsNotExist(statErr) {
+			return nil
+		}
 		return fmt.Errorf("removing worktree: %s", string(out))
 	}
 

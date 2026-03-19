@@ -10,50 +10,39 @@ import (
 
 // ProjectConfig is the top-level previewctl.yaml configuration.
 type ProjectConfig struct {
-	Version        int                        `yaml:"version"`
-	Name           string                     `yaml:"name"`
-	PackageManager string                     `yaml:"package_manager,omitempty"`
-	Core           CoreConfig                 `yaml:"core"`
-	Infrastructure *InfrastructureConfig      `yaml:"infrastructure,omitempty"`
-	Services       map[string]ServiceConfig   `yaml:"services"`
-	Local          *LocalConfig               `yaml:"local,omitempty"`
-	Hooks          HooksConfig                `yaml:"hooks,omitempty"`
+	Version        int                      `yaml:"version"`
+	Name           string                   `yaml:"name"`
+	Core           CoreConfig               `yaml:"core"`
+	Infrastructure *InfrastructureConfig    `yaml:"infrastructure,omitempty"`
+	Services       map[string]ServiceConfig `yaml:"services"`
+	Local          *LocalConfig             `yaml:"local,omitempty"`
+	Hooks          HooksConfig              `yaml:"hooks,omitempty"`
+
+	// Mode is the deployment mode (e.g., "local"). Set at load time, not from YAML.
+	Mode string `yaml:"-"`
 
 	// InfraServices is populated by parsing the compose file referenced in
 	// Infrastructure.ComposeFile. It is not read from YAML directly.
 	InfraServices map[string]InfraService `yaml:"-"`
 }
 
-// CoreConfig holds managed services requiring engine-specific lifecycle.
+// CoreConfig holds managed core services with hook-driven lifecycle.
 type CoreConfig struct {
-	Databases map[string]DatabaseConfig `yaml:"databases,omitempty"`
+	Services map[string]CoreServiceConfig `yaml:"services,omitempty"`
 }
 
-// DatabaseConfig defines a core database. Engine is constant;
-// provider and seed config vary by deployment mode.
-type DatabaseConfig struct {
-	Engine string              `yaml:"engine"`
-	Local  *DatabaseModeConfig `yaml:"local,omitempty"`
-	// Remote *DatabaseModeConfig `yaml:"remote,omitempty"` // future
+// CoreServiceConfig defines a core service managed by hooks.
+type CoreServiceConfig struct {
+	Outputs []string          `yaml:"outputs,omitempty"`
+	Hooks   *CoreServiceHooks `yaml:"hooks,omitempty"`
 }
 
-// DatabaseModeConfig holds provider-specific config for a deployment mode.
-type DatabaseModeConfig struct {
-	Provider   string     `yaml:"provider"`              // "docker", "neon", "remote"
-	Image      string     `yaml:"image,omitempty"`       // docker
-	Port       int        `yaml:"port,omitempty"`        // docker, remote
-	User       string     `yaml:"user,omitempty"`        // docker, remote
-	Password   string     `yaml:"password,omitempty"`    // docker, remote
-	TemplateDb string     `yaml:"template_db,omitempty"`  // docker, remote
-	Seed       []SeedStep `yaml:"seed,omitempty"`        // ordered pipeline
-}
-
-// SeedStep is a single step in the seed pipeline.
-// Exactly one field should be set.
-type SeedStep struct {
-	SQL  string `yaml:"sql,omitempty"`
-	Dump string `yaml:"dump,omitempty"`
-	Run  string `yaml:"run,omitempty"`
+// CoreServiceHooks defines lifecycle hooks for a core service.
+type CoreServiceHooks struct {
+	Init    string `yaml:"init,omitempty"`
+	Seed    string `yaml:"seed,omitempty"`
+	Reset   string `yaml:"reset,omitempty"`
+	Destroy string `yaml:"destroy,omitempty"`
 }
 
 // InfrastructureConfig holds infrastructure configuration.
@@ -122,6 +111,93 @@ func ParseConfig(data []byte) (*ProjectConfig, error) {
 	return &cfg, nil
 }
 
+// LoadConfigWithOverlay loads a base config and merges a mode-specific overlay if present.
+func LoadConfigWithOverlay(basePath, mode string) (*ProjectConfig, error) {
+	cfg, err := LoadConfig(basePath)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.Mode = mode
+
+	// Check for overlay file
+	dir := filepath.Dir(basePath)
+	ext := filepath.Ext(basePath)
+	base := basePath[:len(basePath)-len(ext)]
+	_ = base
+	overlayPath := filepath.Join(dir, fmt.Sprintf("previewctl.%s.yaml", mode))
+
+	overlayData, err := os.ReadFile(overlayPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, nil
+		}
+		return nil, fmt.Errorf("reading overlay config: %w", err)
+	}
+
+	var overlay ProjectConfig
+	if err := yaml.Unmarshal(overlayData, &overlay); err != nil {
+		return nil, fmt.Errorf("parsing overlay config: %w", err)
+	}
+
+	deepMergeConfig(cfg, &overlay)
+	return cfg, nil
+}
+
+// deepMergeConfig merges overlay into base. Maps merge by key, scalars in overlay override base.
+func deepMergeConfig(base, overlay *ProjectConfig) {
+	if overlay.Version != 0 {
+		base.Version = overlay.Version
+	}
+	if overlay.Name != "" {
+		base.Name = overlay.Name
+	}
+
+	// Merge Core
+	if overlay.Core.Services != nil {
+		if base.Core.Services == nil {
+			base.Core.Services = make(map[string]CoreServiceConfig)
+		}
+		for k, overlaySvc := range overlay.Core.Services {
+			baseSvc, exists := base.Core.Services[k]
+			if !exists {
+				base.Core.Services[k] = overlaySvc
+				continue
+			}
+			// Merge: overlay outputs replace base outputs if present
+			if len(overlaySvc.Outputs) > 0 {
+				baseSvc.Outputs = overlaySvc.Outputs
+			}
+			// Merge: overlay hooks replace base hooks if present
+			if overlaySvc.Hooks != nil {
+				baseSvc.Hooks = overlaySvc.Hooks
+			}
+			base.Core.Services[k] = baseSvc
+		}
+	}
+
+	if overlay.Infrastructure != nil {
+		base.Infrastructure = overlay.Infrastructure
+	}
+
+	// Merge Services
+	if overlay.Services != nil {
+		if base.Services == nil {
+			base.Services = make(map[string]ServiceConfig)
+		}
+		for k, v := range overlay.Services {
+			base.Services[k] = v
+		}
+	}
+
+	if overlay.Local != nil {
+		base.Local = overlay.Local
+	}
+	if overlay.Hooks != nil {
+		base.Hooks = overlay.Hooks
+	}
+}
+
 func validateConfig(cfg *ProjectConfig) error {
 	if cfg.Name == "" {
 		return fmt.Errorf("config validation: 'name' is required")
@@ -134,20 +210,10 @@ func validateConfig(cfg *ProjectConfig) error {
 			return fmt.Errorf("config validation: service '%s' requires 'path'", name)
 		}
 	}
-	for name, db := range cfg.Core.Databases {
-		if db.Engine == "" {
-			return fmt.Errorf("config validation: database '%s' requires 'engine'", name)
-		}
-		if db.Local == nil {
-			return fmt.Errorf("config validation: database '%s' requires 'local' config", name)
-		}
-		if db.Local.Image == "" {
-			return fmt.Errorf("config validation: database '%s' requires 'local.image'", name)
-		}
-		if db.Local.Port == 0 {
-			return fmt.Errorf("config validation: database '%s' requires 'local.port'", name)
+	for name, svc := range cfg.Core.Services {
+		if len(svc.Outputs) == 0 {
+			return fmt.Errorf("config validation: core service '%s' requires 'outputs'", name)
 		}
 	}
 	return nil
 }
-

@@ -10,21 +10,17 @@ var templateVarPattern = regexp.MustCompile(`\{\{([^}]+)\}\}`)
 
 // TemplateContext holds the values available for template substitution.
 type TemplateContext struct {
-	ServicePorts PortMap
-	InfraPorts   PortMap
-	Databases    map[string]*DatabaseInfo
+	ServicePorts   PortMap
+	InfraPorts     PortMap
+	CoreOutputs    map[string]map[string]string
+	CurrentService string // set per-service during rendering, enables {{self.port}}
 }
 
 // RenderTemplate replaces {{var}} placeholders in a string with values from the context.
 // Supported variable patterns:
 //   - {{services.<name>.port}} — allocated port for an application service
 //   - {{infrastructure.<name>.port}} — allocated port for an infrastructure service
-//   - {{core.databases.<name>.connection_string}} — database connection string
-//   - {{core.databases.<name>.host}} — database host
-//   - {{core.databases.<name>.port}} — database port
-//   - {{core.databases.<name>.user}} — database user
-//   - {{core.databases.<name>.password}} — database password
-//   - {{core.databases.<name>.database}} — database name
+//   - {{core.<service>.<OUTPUT>}} — output value from a core service
 func RenderTemplate(tmpl string, ctx *TemplateContext) (string, error) {
 	var renderErr error
 
@@ -69,6 +65,20 @@ func resolveVar(parts []string, ctx *TemplateContext) (string, error) {
 	}
 
 	switch parts[0] {
+	case "self":
+		// Shorthand: {{self.port}} resolves to the current service's port
+		if ctx.CurrentService == "" {
+			return "", fmt.Errorf("'self' can only be used inside a service env block")
+		}
+		if len(parts) != 2 || parts[1] != "port" {
+			return "", fmt.Errorf("expected self.port, got %s", strings.Join(parts, "."))
+		}
+		port, ok := ctx.ServicePorts[ctx.CurrentService]
+		if !ok {
+			return "", fmt.Errorf("no port allocated for current service '%s'", ctx.CurrentService)
+		}
+		return fmt.Sprintf("%d", port), nil
+
 	case "services":
 		if len(parts) != 3 || parts[2] != "port" {
 			return "", fmt.Errorf("expected services.<name>.port, got %s", strings.Join(parts, "."))
@@ -98,35 +108,16 @@ func resolveVar(parts []string, ctx *TemplateContext) (string, error) {
 }
 
 func resolveCoreVar(parts []string, ctx *TemplateContext) (string, error) {
-	if len(parts) < 3 {
-		return "", fmt.Errorf("expected core.databases.<name>.<field>")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("expected core.<service>.<output>")
 	}
-
-	if parts[0] != "databases" {
-		return "", fmt.Errorf("unknown core type '%s'", parts[0])
-	}
-
-	dbName := parts[1]
-	db, ok := ctx.Databases[dbName]
+	svc, ok := ctx.CoreOutputs[parts[0]]
 	if !ok {
-		return "", fmt.Errorf("unknown database '%s'", dbName)
+		return "", fmt.Errorf("unknown core service '%s'", parts[0])
 	}
-
-	field := parts[2]
-	switch field {
-	case "connection_string":
-		return db.ConnectionString, nil
-	case "host":
-		return db.Host, nil
-	case "port":
-		return fmt.Sprintf("%d", db.Port), nil
-	case "user":
-		return db.User, nil
-	case "password":
-		return db.Password, nil
-	case "database":
-		return db.Database, nil
-	default:
-		return "", fmt.Errorf("unknown database field '%s'", field)
+	val, ok := svc[parts[1]]
+	if !ok {
+		return "", fmt.Errorf("unknown output '%s' for core service '%s'", parts[1], parts[0])
 	}
+	return val, nil
 }

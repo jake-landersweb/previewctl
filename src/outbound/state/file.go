@@ -43,9 +43,6 @@ func (a *FileStateAdapter) Load(_ context.Context) (*domain.State, error) {
 	if state.Environments == nil {
 		state.Environments = make(map[string]*domain.EnvironmentEntry)
 	}
-	if state.Snapshots == nil {
-		state.Snapshots = make(map[string]*domain.SnapshotState)
-	}
 
 	return &state, nil
 }
@@ -93,31 +90,6 @@ func (a *FileStateAdapter) RemoveEnvironment(ctx context.Context, name string) e
 	return a.writeAtomic(state)
 }
 
-func (a *FileStateAdapter) UpdateSnapshot(_ context.Context, dbName string, info *domain.SnapshotUpdate) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	state, err := a.loadUnsafe()
-	if err != nil {
-		return err
-	}
-
-	snap, ok := state.Snapshots[dbName]
-	if !ok {
-		snap = &domain.SnapshotState{}
-		state.Snapshots[dbName] = snap
-	}
-
-	if info.LastSeeded != nil {
-		snap.LastSeeded = info.LastSeeded
-	}
-	if info.TemplateReady != nil {
-		snap.TemplateReady = *info.TemplateReady
-	}
-
-	return a.writeAtomic(state)
-}
-
 // loadUnsafe reads state without acquiring the mutex (caller must hold it).
 func (a *FileStateAdapter) loadUnsafe() (*domain.State, error) {
 	data, err := os.ReadFile(a.path)
@@ -135,9 +107,6 @@ func (a *FileStateAdapter) loadUnsafe() (*domain.State, error) {
 
 	if state.Environments == nil {
 		state.Environments = make(map[string]*domain.EnvironmentEntry)
-	}
-	if state.Snapshots == nil {
-		state.Snapshots = make(map[string]*domain.SnapshotState)
 	}
 
 	return &state, nil

@@ -38,16 +38,14 @@ func TestFileStateAdapter_RoundTrip(t *testing.T) {
 
 	now := time.Now()
 	entry := &domain.EnvironmentEntry{
-		Name:      "feat-auth",
-		Mode:      domain.ModeLocal,
-		Branch:    "feat-auth",
-		Status:    domain.StatusRunning,
-		CreatedAt: now,
-		UpdatedAt: now,
-		Ports:     domain.PortMap{"backend": 8042, "web": 3042},
-		Databases: map[string]domain.DatabaseRef{
-			"main": {Name: "wt_feat_auth", Provider: "local-docker"},
-		},
+		Name:        "feat-auth",
+		Mode:        domain.ModeLocal,
+		Branch:      "feat-auth",
+		Status:      domain.StatusRunning,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Ports:       domain.PortMap{"backend": 8042, "web": 3042},
+		CoreOutputs: make(map[string]map[string]string),
 		Local: &domain.LocalMeta{
 			WorktreePath:       "/Users/jake/worktrees/myproject/feat-auth",
 			ComposeProjectName: "myproject-feat-auth",
@@ -108,35 +106,6 @@ func TestFileStateAdapter_Remove(t *testing.T) {
 	}
 	if loaded != nil {
 		t.Error("expected nil after removal")
-	}
-}
-
-func TestFileStateAdapter_UpdateSnapshot(t *testing.T) {
-	adapter := NewFileStateAdapter(tempStatePath(t))
-	ctx := context.Background()
-
-	now := time.Now()
-	ready := true
-	if err := adapter.UpdateSnapshot(ctx, "main", &domain.SnapshotUpdate{
-		LastSeeded:    &now,
-		TemplateReady: &ready,
-	}); err != nil {
-		t.Fatalf("UpdateSnapshot error: %v", err)
-	}
-
-	state, err := adapter.Load(ctx)
-	if err != nil {
-		t.Fatalf("Load error: %v", err)
-	}
-	snap := state.Snapshots["main"]
-	if snap == nil {
-		t.Fatal("expected snapshot state for 'main'")
-	}
-	if !snap.TemplateReady {
-		t.Error("expected templateReady to be true")
-	}
-	if snap.LastSeeded == nil {
-		t.Error("expected lastSeeded to be set")
 	}
 }
 

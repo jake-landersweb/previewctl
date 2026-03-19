@@ -23,7 +23,7 @@ func NewEnvGenAdapter(config *domain.ProjectConfig) *EnvGenAdapter {
 	return &EnvGenAdapter{config: config}
 }
 
-func (a *EnvGenAdapter) Generate(_ context.Context, envName string, workdir string, ports domain.PortMap, databases map[string]*domain.DatabaseInfo) error {
+func (a *EnvGenAdapter) Generate(_ context.Context, envName string, workdir string, ports domain.PortMap, coreOutputs map[string]map[string]string) error {
 	// Split ports into service and infrastructure
 	servicePorts := make(domain.PortMap)
 	infraPorts := make(domain.PortMap)
@@ -38,15 +38,16 @@ func (a *EnvGenAdapter) Generate(_ context.Context, envName string, workdir stri
 	ctx := &domain.TemplateContext{
 		ServicePorts: servicePorts,
 		InfraPorts:   infraPorts,
-		Databases:    databases,
+		CoreOutputs:  coreOutputs,
 	}
 
 	// Group env vars by target file path (service path + env_file)
 	fileEnvs := make(map[string]map[string]string)
-	for _, svc := range a.config.Services {
+	for svcName, svc := range a.config.Services {
 		if svc.Env == nil {
 			continue
 		}
+		ctx.CurrentService = svcName
 		rendered, err := domain.RenderEnvMap(svc.Env, ctx)
 		if err != nil {
 			return fmt.Errorf("rendering env for service: %w", err)
