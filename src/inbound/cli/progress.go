@@ -94,6 +94,14 @@ func (r *CLIProgressReporter) OnStep(event domain.StepEvent) {
 			styleSkipped.Render("−"),
 			styleDim.Render(event.Message),
 		)
+
+	case domain.StepStreaming:
+		// Stop spinner so hook output can stream cleanly
+		if r.spinner != nil {
+			r.spinner.Stop()
+			r.spinner = nil
+		}
+		fmt.Fprintf(os.Stderr, "\r\033[K")
 	}
 }
 

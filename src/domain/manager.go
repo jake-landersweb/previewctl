@@ -129,6 +129,7 @@ func (m *Manager) Init(ctx context.Context, envName string, branch string) (*Env
 			fmt.Sprintf("Running seed hook for %s...", svcName),
 			&seedMsg,
 			hctx, func() error {
+				m.progress.OnStep(StepEvent{Step: fmt.Sprintf("seed_core_%s", svcName), Status: StepStreaming})
 				outputs, err := m.runCoreHook(ctx, svcName, "seed", envName, ports)
 				if err != nil {
 					return err
@@ -236,6 +237,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 			fmt.Sprintf("Running destroy hook for %s...", svcName),
 			&destroyMsg,
 			hctx, func() error {
+				m.progress.OnStep(StepEvent{Step: fmt.Sprintf("destroy_core_%s", svcName), Status: StepStreaming})
 				_, err := m.runCoreHook(ctx, svcName, "destroy", envName, entry.Ports)
 				return err
 			}); err != nil {
@@ -387,6 +389,7 @@ func (m *Manager) CoreInit(ctx context.Context, svcName string) error {
 		fmt.Sprintf("Running init hook for %s...", svcName),
 		&initMsg,
 		hctx, func() error {
+			m.progress.OnStep(StepEvent{Step: "core_init", Status: StepStreaming})
 			_, err := m.runCoreHook(ctx, svcName, "init", "", nil)
 			return err
 		}); err != nil {
@@ -427,6 +430,7 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 		fmt.Sprintf("Running reset hook for %s...", svcName),
 		&resetMsg,
 		hctx, func() error {
+			m.progress.OnStep(StepEvent{Step: "core_reset", Status: StepStreaming})
 			outputs, err := m.runCoreHook(ctx, svcName, "reset", envName, entry.Ports)
 			if err != nil {
 				return err
