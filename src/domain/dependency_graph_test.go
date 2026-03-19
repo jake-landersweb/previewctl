@@ -7,8 +7,8 @@ import (
 
 func TestTopologicalSort_Simple(t *testing.T) {
 	services := map[string]ServiceConfig{
-		"web":     {Path: "apps/web", Port: 3000, DependsOn: []string{"backend"}},
-		"backend": {Path: "apps/backend", Port: 8000},
+		"web":     {Path: "apps/web", DependsOn: []string{"backend"}},
+		"backend": {Path: "apps/backend"},
 	}
 
 	order, err := TopologicalSort(services)
@@ -25,10 +25,10 @@ func TestTopologicalSort_Simple(t *testing.T) {
 
 func TestTopologicalSort_Diamond(t *testing.T) {
 	services := map[string]ServiceConfig{
-		"a": {Path: "a", Port: 1000},
-		"b": {Path: "b", Port: 2000, DependsOn: []string{"a"}},
-		"c": {Path: "c", Port: 3000, DependsOn: []string{"a"}},
-		"d": {Path: "d", Port: 4000, DependsOn: []string{"b", "c"}},
+		"a": {Path: "a"},
+		"b": {Path: "b", DependsOn: []string{"a"}},
+		"c": {Path: "c", DependsOn: []string{"a"}},
+		"d": {Path: "d", DependsOn: []string{"b", "c"}},
 	}
 
 	order, err := TopologicalSort(services)
@@ -49,8 +49,8 @@ func TestTopologicalSort_Diamond(t *testing.T) {
 
 func TestTopologicalSort_CycleDetection(t *testing.T) {
 	services := map[string]ServiceConfig{
-		"a": {Path: "a", Port: 1000, DependsOn: []string{"b"}},
-		"b": {Path: "b", Port: 2000, DependsOn: []string{"a"}},
+		"a": {Path: "a", DependsOn: []string{"b"}},
+		"b": {Path: "b", DependsOn: []string{"a"}},
 	}
 
 	_, err := TopologicalSort(services)
@@ -64,9 +64,9 @@ func TestTopologicalSort_CycleDetection(t *testing.T) {
 
 func TestTopologicalSort_NoDependencies(t *testing.T) {
 	services := map[string]ServiceConfig{
-		"a": {Path: "a", Port: 1000},
-		"b": {Path: "b", Port: 2000},
-		"c": {Path: "c", Port: 3000},
+		"a": {Path: "a"},
+		"b": {Path: "b"},
+		"c": {Path: "c"},
 	}
 
 	order, err := TopologicalSort(services)
@@ -86,8 +86,8 @@ func TestTopologicalSort_InfraDependency(t *testing.T) {
 	// Services can depend on infrastructure (redis), which is not in the services map.
 	// These deps should be ignored for sorting purposes.
 	services := map[string]ServiceConfig{
-		"backend": {Path: "apps/backend", Port: 8000, DependsOn: []string{"redis"}},
-		"web":     {Path: "apps/web", Port: 3000, DependsOn: []string{"backend"}},
+		"backend": {Path: "apps/backend", DependsOn: []string{"redis"}},
+		"web":     {Path: "apps/web", DependsOn: []string{"backend"}},
 	}
 
 	order, err := TopologicalSort(services)

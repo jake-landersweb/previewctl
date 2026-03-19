@@ -10,12 +10,11 @@ import (
 
 // HooksConfig maps step names to their before/after hooks.
 // Step names match the lifecycle steps: allocate_ports, create_compute,
-// ensure_database_<name>, clone_database_<name>, symlink_env, generate_env,
-// start_infra, save_state, load_state, destroy_compute, destroy_database_<name>,
-// cleanup_env, remove_state, reset_database, ensure_infra, seed_template.
+// symlink_env, generate_env, start_infra, save_state, load_state,
+// destroy_compute, cleanup_env, remove_state.
 //
 // Additionally, lifecycle-level hooks can be defined:
-// create, delete, seed, reset — these run before/after the entire operation.
+// create, delete — these run before/after the entire operation.
 type HooksConfig map[string]StepHooks
 
 // StepHooks defines before and after hooks for a step.
@@ -27,7 +26,7 @@ type StepHooks struct {
 // HookDef defines a single hook to execute.
 type HookDef struct {
 	Run             string `yaml:"run"`
-	ContinueOnError bool   `yaml:"continueOnError,omitempty"`
+	ContinueOnError bool   `yaml:"continue_on_error,omitempty"`
 }
 
 // HookContext provides environment variables and working directory for hook execution.
@@ -38,7 +37,7 @@ type HookContext struct {
 	ProjectRoot  string
 	WorktreePath string
 	Ports        PortMap
-	Databases    map[string]*DatabaseInfo
+	CoreOutputs  map[string]map[string]string
 	Step         string
 	Phase        string // "before" or "after"
 }
@@ -155,14 +154,11 @@ func (r *HookRunner) buildEnv(hctx *HookContext) []string {
 		set(envKey, fmt.Sprintf("%d", port))
 	}
 
-	for name, dbInfo := range hctx.Databases {
-		prefix := fmt.Sprintf("PREVIEWCTL_DB_%s", strings.ToUpper(strings.ReplaceAll(name, "-", "_")))
-		set(prefix+"_HOST", dbInfo.Host)
-		set(prefix+"_PORT", fmt.Sprintf("%d", dbInfo.Port))
-		set(prefix+"_USER", dbInfo.User)
-		set(prefix+"_PASSWORD", dbInfo.Password)
-		set(prefix+"_NAME", dbInfo.Database)
-		set(prefix+"_URL", dbInfo.ConnectionString)
+	for svcName, outputs := range hctx.CoreOutputs {
+		prefix := "PREVIEWCTL_CORE_" + strings.ToUpper(strings.ReplaceAll(svcName, "-", "_")) + "_"
+		for key, val := range outputs {
+			env = append(env, prefix+strings.ToUpper(key)+"="+val)
+		}
 	}
 
 	return env

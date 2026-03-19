@@ -42,10 +42,6 @@ func newCreateCmd() *cobra.Command {
 				KeyValue("Worktree", entry.Local.WorktreePath)
 			}
 
-			for dbName, dbRef := range entry.Databases {
-				KeyValue(fmt.Sprintf("Database (%s)", dbName), dbRef.Name)
-			}
-
 			SectionHeader("Ports")
 			// Sort port names for consistent output
 			portNames := make([]string, 0, len(entry.Ports))

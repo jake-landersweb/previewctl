@@ -3,25 +3,26 @@ package domain
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 )
 
 // Manager orchestrates environment lifecycle by coordinating all ports.
 // It is the single source of truth — all inbound adapters delegate to it.
 type Manager struct {
-	databases  map[string]DatabasePort
-	compute    ComputePort
-	networking NetworkingPort
-	envgen     EnvPort
-	state      StatePort
-	progress   ProgressReporter
-	hooks      *HookRunner
-	config     *ProjectConfig
+	compute     ComputePort
+	networking  NetworkingPort
+	envgen      EnvPort
+	state       StatePort
+	progress    ProgressReporter
+	hooks       *HookRunner
+	config      *ProjectConfig
+	projectRoot string
 }
 
 // ManagerDeps holds the dependencies for creating a Manager.
 type ManagerDeps struct {
-	Databases   map[string]DatabasePort
 	Compute     ComputePort
 	Networking  NetworkingPort
 	EnvGen      EnvPort
@@ -38,14 +39,14 @@ func NewManager(deps ManagerDeps) *Manager {
 		progress = NoopReporter{}
 	}
 	return &Manager{
-		databases:  deps.Databases,
-		compute:    deps.Compute,
-		networking: deps.Networking,
-		envgen:     deps.EnvGen,
-		state:      deps.State,
-		progress:   progress,
-		hooks:      NewHookRunner(deps.Config.Hooks, progress),
-		config:     deps.Config,
+		compute:     deps.Compute,
+		networking:  deps.Networking,
+		envgen:      deps.EnvGen,
+		state:       deps.State,
+		progress:    progress,
+		hooks:       NewHookRunner(deps.Config.Hooks, progress),
+		config:      deps.Config,
+		projectRoot: deps.ProjectRoot,
 	}
 }
 
@@ -92,7 +93,11 @@ func (m *Manager) Init(ctx context.Context, envName string, branch string) (*Env
 	// 1. Allocate ports
 	var ports PortMap
 	if err := m.step(ctx, "allocate_ports", "Allocating ports...", msg("Ports allocated"), hctx, func() error {
-		ports = m.networking.AllocatePorts(envName)
+		var err error
+		ports, err = m.networking.AllocatePorts(envName)
+		if err != nil {
+			return err
+		}
 		hctx.Ports = ports
 		return nil
 	}); err != nil {
@@ -113,35 +118,26 @@ func (m *Manager) Init(ctx context.Context, envName string, branch string) (*Env
 		return nil, fmt.Errorf("creating compute resources: %w", err)
 	}
 
-	// 3. Set up databases
-	dbInfos := make(map[string]*DatabaseInfo)
-	dbRefs := make(map[string]DatabaseRef)
-	for dbName, dbPort := range m.databases {
-		if err := m.step(ctx, fmt.Sprintf("ensure_database_%s", dbName),
-			fmt.Sprintf("Connecting to %s server...", dbName),
-			msg(fmt.Sprintf("Connected to %s server", dbName)),
-			hctx, func() error {
-				return dbPort.EnsureInfrastructure(ctx)
-			}); err != nil {
-			return nil, fmt.Errorf("ensuring database %s infrastructure: %w", dbName, err)
+	// 3. Run core service "seed" hooks
+	coreOutputs := make(map[string]map[string]string)
+	for svcName, svc := range m.config.Core.Services {
+		if svc.Hooks == nil || svc.Hooks.Seed == "" {
+			continue
 		}
-
-		cloneMsg := fmt.Sprintf("Cloned %s database", dbName)
-		if err := m.step(ctx, fmt.Sprintf("clone_database_%s", dbName),
-			fmt.Sprintf("Cloning %s database from template...", dbName),
-			&cloneMsg,
+		seedMsg := fmt.Sprintf("Seeded core service %s", svcName)
+		if err := m.step(ctx, fmt.Sprintf("seed_core_%s", svcName),
+			fmt.Sprintf("Running seed hook for %s...", svcName),
+			&seedMsg,
 			hctx, func() error {
-				dbInfo, err := dbPort.CreateDatabase(ctx, envName)
+				outputs, err := m.runCoreHook(ctx, svcName, "seed", envName, ports)
 				if err != nil {
 					return err
 				}
-				dbInfos[dbName] = dbInfo
-				dbRefs[dbName] = DatabaseRef{Name: dbInfo.Database, Provider: "local-docker"}
-				hctx.Databases = dbInfos
-				cloneMsg = fmt.Sprintf("Cloned %s → %s", dbName, dbInfo.Database)
+				coreOutputs[svcName] = outputs
+				hctx.CoreOutputs = coreOutputs
 				return nil
 			}); err != nil {
-			return nil, fmt.Errorf("creating database %s: %w", dbName, err)
+			return nil, fmt.Errorf("seeding core service %s: %w", svcName, err)
 		}
 	}
 
@@ -154,7 +150,7 @@ func (m *Manager) Init(ctx context.Context, envName string, branch string) (*Env
 
 	// 5. Generate env files
 	if err := m.step(ctx, "generate_env", "Generating .env.local files...", msg(".env.local files generated"), hctx, func() error {
-		return m.envgen.Generate(ctx, envName, resources.WorktreePath, ports, dbInfos)
+		return m.envgen.Generate(ctx, envName, resources.WorktreePath, ports, coreOutputs)
 	}); err != nil {
 		return nil, fmt.Errorf("generating env files: %w", err)
 	}
@@ -169,14 +165,14 @@ func (m *Manager) Init(ctx context.Context, envName string, branch string) (*Env
 	// 7. Persist state
 	now := time.Now()
 	entry := &EnvironmentEntry{
-		Name:      envName,
-		Mode:      ModeLocal,
-		Branch:    branch,
-		Status:    StatusRunning,
-		CreatedAt: now,
-		UpdatedAt: now,
-		Ports:     ports,
-		Databases: dbRefs,
+		Name:        envName,
+		Mode:        ModeLocal,
+		Branch:      branch,
+		Status:      StatusRunning,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Ports:       ports,
+		CoreOutputs: coreOutputs,
 		Local: &LocalMeta{
 			WorktreePath:       resources.WorktreePath,
 			ComposeProjectName: fmt.Sprintf("%s-%s", m.config.Name, envName),
@@ -230,21 +226,27 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 		return err
 	}
 
+	// Run core service "destroy" hooks before removing the worktree
+	for svcName, svc := range m.config.Core.Services {
+		if svc.Hooks == nil || svc.Hooks.Destroy == "" {
+			continue
+		}
+		destroyMsg := fmt.Sprintf("Destroyed core service %s", svcName)
+		if err := m.step(ctx, fmt.Sprintf("destroy_core_%s", svcName),
+			fmt.Sprintf("Running destroy hook for %s...", svcName),
+			&destroyMsg,
+			hctx, func() error {
+				_, err := m.runCoreHook(ctx, svcName, "destroy", envName, entry.Ports)
+				return err
+			}); err != nil {
+			return fmt.Errorf("destroying core service %s: %w", svcName, err)
+		}
+	}
+
 	if err := m.step(ctx, "destroy_compute", "Removing worktree and stopping containers...", msg("Worktree and containers removed"), hctx, func() error {
 		return m.compute.Destroy(ctx, envName)
 	}); err != nil {
 		return fmt.Errorf("destroying compute resources: %w", err)
-	}
-
-	for dbName, dbPort := range m.databases {
-		if err := m.step(ctx, fmt.Sprintf("destroy_database_%s", dbName),
-			fmt.Sprintf("Dropping %s database...", dbName),
-			msg(fmt.Sprintf("Database %s dropped", dbName)),
-			hctx, func() error {
-				return dbPort.DestroyDatabase(ctx, envName)
-			}); err != nil {
-			return fmt.Errorf("destroying database %s: %w", dbName, err)
-		}
 	}
 
 	if entry.Local != nil && entry.Local.WorktreePath != "" {
@@ -297,108 +299,149 @@ func (m *Manager) Status(ctx context.Context, envName string) (*EnvironmentDetai
 		return nil, fmt.Errorf("checking infra status: %w", err)
 	}
 
-	dbExists := make(map[string]bool)
-	for dbName, dbPort := range m.databases {
-		exists, err := dbPort.DatabaseExists(ctx, envName)
-		if err != nil {
-			return nil, fmt.Errorf("checking database %s: %w", dbName, err)
-		}
-		dbExists[dbName] = exists
-	}
-
-	fullState, err := m.state.Load(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("loading full state: %w", err)
-	}
-
 	return &EnvironmentDetail{
-		Entry:          entry,
-		InfraRunning:   infraRunning,
-		DatabaseExists: dbExists,
-		SnapshotInfo:   fullState.Snapshots,
+		Entry:        entry,
+		InfraRunning: infraRunning,
 	}, nil
 }
 
-// ResetDatabase resets an environment's database from the template.
-func (m *Manager) ResetDatabase(ctx context.Context, envName string, dbName string) error {
-	dbPort, ok := m.databases[dbName]
+// RunCoreHook runs a core service hook for a given environment, loading ports from state.
+func (m *Manager) RunCoreHook(ctx context.Context, svcName, action, envName string) (map[string]string, error) {
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return nil, fmt.Errorf("loading environment: %w", err)
+	}
+	var ports PortMap
+	if entry != nil {
+		ports = entry.Ports
+	}
+	return m.runCoreHook(ctx, svcName, action, envName, ports)
+}
+
+// runCoreHook executes a core service hook with proper env vars and returns captured outputs.
+func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName string, ports PortMap) (map[string]string, error) {
+	svc, ok := m.config.Core.Services[svcName]
 	if !ok {
-		return fmt.Errorf("unknown database '%s'", dbName)
+		return nil, fmt.Errorf("unknown core service '%s'", svcName)
+	}
+
+	var hookScript string
+	if svc.Hooks != nil {
+		switch action {
+		case "init":
+			hookScript = svc.Hooks.Init
+		case "seed":
+			hookScript = svc.Hooks.Seed
+		case "reset":
+			hookScript = svc.Hooks.Reset
+		case "destroy":
+			hookScript = svc.Hooks.Destroy
+		}
+	}
+	if hookScript == "" {
+		return nil, nil
+	}
+
+	// Build environment variables
+	env := append(os.Environ(),
+		fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
+		fmt.Sprintf("PREVIEWCTL_ACTION=%s", action),
+		fmt.Sprintf("PREVIEWCTL_PROJECT_NAME=%s", m.config.Name),
+		fmt.Sprintf("PREVIEWCTL_SERVICE_NAME=%s", svcName),
+		fmt.Sprintf("PREVIEWCTL_PROJECT_ROOT=%s", m.projectRoot),
+	)
+
+	// Add port env vars
+	for name, port := range ports {
+		envVar := fmt.Sprintf("PREVIEWCTL_PORT_%s=%d",
+			strings.ToUpper(strings.ReplaceAll(name, "-", "_")), port)
+		env = append(env, envVar)
+	}
+
+	// Only validate outputs for actions that produce state (seed, reset)
+	var requiredOutputs []string
+	if action == "seed" || action == "reset" {
+		requiredOutputs = svc.Outputs
+	}
+
+	return ExecuteCoreHook(ctx, hookScript, requiredOutputs, env, m.projectRoot)
+}
+
+// CoreInit runs the "init" hook for a core service (one-time setup).
+func (m *Manager) CoreInit(ctx context.Context, svcName string) error {
+	svc, ok := m.config.Core.Services[svcName]
+	if !ok {
+		return fmt.Errorf("unknown core service '%s'", svcName)
+	}
+	if svc.Hooks == nil || svc.Hooks.Init == "" {
+		return fmt.Errorf("core service '%s' has no init hook defined", svcName)
 	}
 
 	hctx := &HookContext{
-		EnvName:     envName,
 		ProjectName: m.config.Name,
+		ProjectRoot: m.projectRoot,
 	}
 
-	// Lifecycle-level before hook
-	if err := m.hooks.RunBefore(ctx, "reset", hctx); err != nil {
-		return err
-	}
-
-	if err := m.step(ctx, "reset_database",
-		fmt.Sprintf("Resetting %s database...", dbName),
-		msg(fmt.Sprintf("Database %s reset", dbName)),
+	initMsg := fmt.Sprintf("Initialized core service %s", svcName)
+	if err := m.step(ctx, "core_init",
+		fmt.Sprintf("Running init hook for %s...", svcName),
+		&initMsg,
 		hctx, func() error {
-			info, err := dbPort.ResetDatabase(ctx, envName)
-			if err != nil {
-				return err
-			}
-			hctx.Databases = map[string]*DatabaseInfo{dbName: info}
-			return nil
+			_, err := m.runCoreHook(ctx, svcName, "init", "", nil)
+			return err
 		}); err != nil {
-		return fmt.Errorf("resetting database %s: %w", dbName, err)
-	}
-
-	// Lifecycle-level after hook
-	if err := m.hooks.RunAfter(ctx, "reset", hctx); err != nil {
-		return err
+		return fmt.Errorf("initializing core service %s: %w", svcName, err)
 	}
 
 	return nil
 }
 
-// SeedTemplate seeds or refreshes a template database.
-func (m *Manager) SeedTemplate(ctx context.Context, dbName string, snapshotPath string) error {
-	dbPort, ok := m.databases[dbName]
+// CoreReset runs the "reset" hook for a core service on a specific environment.
+func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error {
+	svc, ok := m.config.Core.Services[svcName]
 	if !ok {
-		return fmt.Errorf("unknown database '%s'", dbName)
+		return fmt.Errorf("unknown core service '%s'", svcName)
+	}
+	if svc.Hooks == nil || svc.Hooks.Reset == "" {
+		return fmt.Errorf("core service '%s' has no reset hook defined", svcName)
+	}
+
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return fmt.Errorf("loading environment: %w", err)
+	}
+	if entry == nil {
+		return fmt.Errorf("environment '%s' not found", envName)
 	}
 
 	hctx := &HookContext{
-		EnvName:     "",
+		EnvName:     envName,
 		ProjectName: m.config.Name,
+		ProjectRoot: m.projectRoot,
+		Ports:       entry.Ports,
+		CoreOutputs: entry.CoreOutputs,
 	}
 
-	// Lifecycle-level before hook
-	if err := m.hooks.RunBefore(ctx, "seed", hctx); err != nil {
-		return err
-	}
-
-	if err := m.step(ctx, "ensure_infra", "Ensuring database infrastructure...", msg("Database infrastructure ready"), hctx, func() error {
-		return dbPort.EnsureInfrastructure(ctx)
-	}); err != nil {
-		return fmt.Errorf("ensuring infrastructure: %w", err)
-	}
-
-	if err := m.step(ctx, "seed_template", "Seeding template database...", msg("Template database seeded"), hctx, func() error {
-		return dbPort.SeedTemplate(ctx, snapshotPath)
-	}); err != nil {
-		return fmt.Errorf("seeding template: %w", err)
-	}
-
-	now := time.Now()
-	ready := true
-	if err := m.state.UpdateSnapshot(ctx, dbName, &SnapshotUpdate{
-		LastSeeded:    &now,
-		TemplateReady: &ready,
-	}); err != nil {
-		return fmt.Errorf("updating snapshot state: %w", err)
-	}
-
-	// Lifecycle-level after hook
-	if err := m.hooks.RunAfter(ctx, "seed", hctx); err != nil {
-		return err
+	resetMsg := fmt.Sprintf("Reset core service %s for %s", svcName, envName)
+	if err := m.step(ctx, "core_reset",
+		fmt.Sprintf("Running reset hook for %s...", svcName),
+		&resetMsg,
+		hctx, func() error {
+			outputs, err := m.runCoreHook(ctx, svcName, "reset", envName, entry.Ports)
+			if err != nil {
+				return err
+			}
+			// Update stored outputs if hook produced new ones
+			if outputs != nil {
+				if entry.CoreOutputs == nil {
+					entry.CoreOutputs = make(map[string]map[string]string)
+				}
+				entry.CoreOutputs[svcName] = outputs
+				return m.state.SetEnvironment(ctx, envName, entry)
+			}
+			return nil
+		}); err != nil {
+		return fmt.Errorf("resetting core service %s: %w", svcName, err)
 	}
 
 	return nil

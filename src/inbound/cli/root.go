@@ -18,21 +18,31 @@ const configFileName = "previewctl.yaml"
 // Execute runs the CLI.
 func Execute() {
 	rootCmd := &cobra.Command{
-		Use:     "previewctl",
-		Short:   "Manage isolated preview and development environments",
-		Version: version.Get(),
+		Use:   "previewctl",
+		Short: "Manage isolated preview and development environments",
+		Run: func(cmd *cobra.Command, args []string) {
+			if v, _ := cmd.Flags().GetBool("version"); v {
+				runVersionCheck()
+				return
+			}
+			_ = cmd.Help()
+		},
 	}
+	rootCmd.Flags().BoolP("version", "v", false, "Print the current version and check for updates")
 
 	rootCmd.AddCommand(
 		newCreateCmd(),
 		newDeleteCmd(),
 		newListCmd(),
 		newStatusCmd(),
-		newDbCmd(),
+		newCoreCmd(),
 		newVetCmd(),
+		newCleanCmd(),
+		newVersionCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
+		version.CheckForUpdate()
 		os.Exit(1)
 	}
 }
@@ -44,26 +54,10 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 		return nil, nil, err
 	}
 
-	// Build database adapters
-	databases := make(map[string]domain.DatabasePort)
-	for name, dbCfg := range cfg.Core.Databases {
-		switch dbCfg.Engine {
-		case "postgres":
-			databases[name] = local.NewPostgresAdapter(name, dbCfg)
-		default:
-			return nil, nil, fmt.Errorf("unsupported database engine '%s' for '%s'", dbCfg.Engine, name)
-		}
-	}
-
-	// Resolve compose file from config (relative to project root)
+	// Resolve infrastructure compose file path (already parsed in loadConfig)
 	composeFile := ""
-	if cfg.Local != nil && cfg.Local.ComposeFile != "" {
-		composeFile = filepath.Join(projectRoot, cfg.Local.ComposeFile)
-		if _, err := os.Stat(composeFile); os.IsNotExist(err) {
-			return nil, nil, fmt.Errorf("compose file not found: %s", composeFile)
-		}
-	} else if len(cfg.Infrastructure) > 0 {
-		return nil, nil, fmt.Errorf("infrastructure services defined but 'local.composeFile' is not set in %s", configFileName)
+	if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile != "" {
+		composeFile = filepath.Join(projectRoot, cfg.Infrastructure.ComposeFile)
 	}
 
 	// Build state path
@@ -71,13 +65,13 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 	statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
 
 	mgr := domain.NewManager(domain.ManagerDeps{
-		Databases:  databases,
-		Compute:    local.NewComputeAdapter(cfg, composeFile),
-		Networking: local.NewNetworkingAdapter(cfg),
-		EnvGen:     local.NewEnvGenAdapter(cfg),
-		State:      filestate.NewFileStateAdapter(statePath),
-		Progress:   progress,
-		Config:     cfg,
+		Compute:     local.NewComputeAdapter(cfg, composeFile),
+		Networking:  local.NewNetworkingAdapter(cfg),
+		EnvGen:      local.NewEnvGenAdapter(cfg),
+		State:       filestate.NewFileStateAdapter(statePath),
+		Progress:    progress,
+		Config:      cfg,
+		ProjectRoot: projectRoot,
 	})
 
 	return mgr, cfg, nil
@@ -95,9 +89,18 @@ func loadConfig() (*domain.ProjectConfig, string, error) {
 	for {
 		path := filepath.Join(dir, configFileName)
 		if _, err := os.Stat(path); err == nil {
-			cfg, err := domain.LoadConfig(path)
+			cfg, err := domain.LoadConfigWithOverlay(path, "local")
 			if err != nil {
 				return nil, "", err
+			}
+			// Parse infrastructure compose file to populate InfraServices
+			if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile != "" {
+				composePath := filepath.Join(dir, cfg.Infrastructure.ComposeFile)
+				infraServices, err := domain.ParseComposeFile(composePath)
+				if err != nil {
+					return nil, "", fmt.Errorf("parsing infrastructure compose file: %w", err)
+				}
+				cfg.InfraServices = infraServices
 			}
 			return cfg, dir, nil
 		}

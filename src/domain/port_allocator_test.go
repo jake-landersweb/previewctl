@@ -2,70 +2,78 @@ package domain
 
 import "testing"
 
-func TestAllocatePortOffset_Deterministic(t *testing.T) {
-	offset1 := AllocatePortOffset("feat-auth")
-	offset2 := AllocatePortOffset("feat-auth")
-	if offset1 != offset2 {
-		t.Errorf("expected deterministic offset, got %d and %d", offset1, offset2)
+func TestAllocatePortBlock_Deterministic(t *testing.T) {
+	names := []string{"backend", "web", "redis"}
+
+	ports1, err := AllocatePortBlock("feat-auth", names)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ports2, err := AllocatePortBlock("feat-auth", names)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, name := range names {
+		if ports1[name] != ports2[name] {
+			t.Errorf("expected deterministic port for '%s', got %d and %d", name, ports1[name], ports2[name])
+		}
 	}
 }
 
-func TestAllocatePortOffset_InRange(t *testing.T) {
-	names := []string{
+func TestAllocatePortBlock_InRange(t *testing.T) {
+	names := []string{"backend", "web", "redis"}
+	envNames := []string{
 		"feat-auth", "feat-payments", "bugfix-login", "main",
 		"release-v2", "hotfix-42", "test-env", "dev",
 		"a", "very-long-environment-name-that-should-still-work",
 	}
-	for _, name := range names {
-		offset := AllocatePortOffset(name)
-		if offset < 1 || offset > maxOffset {
-			t.Errorf("offset for '%s' is %d, expected [1, %d]", name, offset, maxOffset)
+
+	for _, envName := range envNames {
+		ports, err := AllocatePortBlock(envName, names)
+		if err != nil {
+			t.Fatalf("unexpected error for '%s': %v", envName, err)
+		}
+		for svc, port := range ports {
+			if port < portRangeStart || port >= portRangeEnd {
+				t.Errorf("port for '%s' in env '%s' is %d, expected [%d, %d)", svc, envName, port, portRangeStart, portRangeEnd)
+			}
 		}
 	}
 }
 
-func TestAllocatePortOffset_DifferentNames(t *testing.T) {
-	offset1 := AllocatePortOffset("feat-auth")
-	offset2 := AllocatePortOffset("feat-payments")
+func TestAllocatePortBlock_DifferentEnvNames(t *testing.T) {
+	names := []string{"backend"}
+
+	ports1, err := AllocatePortBlock("feat-auth", names)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ports2, err := AllocatePortBlock("feat-payments", names)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	// Not guaranteed to be different for all pairs, but these two should differ
-	// due to FNV-1a properties. This is a sanity check, not a guarantee.
-	if offset1 == offset2 {
-		t.Logf("warning: offsets for 'feat-auth' and 'feat-payments' collide at %d", offset1)
+	// due to FNV-1a properties.
+	if ports1["backend"] == ports2["backend"] {
+		t.Logf("warning: ports for 'feat-auth' and 'feat-payments' collide at %d", ports1["backend"])
 	}
 }
 
-func TestAllocatePorts(t *testing.T) {
-	basePorts := map[string]int{
-		"backend": 8000,
-		"web":     3000,
-		"redis":   6379,
+func TestAllocatePortBlock_SequentialPorts(t *testing.T) {
+	names := []string{"a", "b", "c"}
+
+	ports, err := AllocatePortBlock("test-env", names)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	ports := AllocatePorts("feat-auth", basePorts)
-	offset := AllocatePortOffset("feat-auth")
-
-	if ports["backend"] != 8000+offset {
-		t.Errorf("expected backend %d, got %d", 8000+offset, ports["backend"])
+	// Names are sorted, so ports should be sequential (assuming all are free)
+	if ports["b"] != ports["a"]+1 {
+		t.Errorf("expected sequential ports: a=%d, b=%d", ports["a"], ports["b"])
 	}
-	if ports["web"] != 3000+offset {
-		t.Errorf("expected web %d, got %d", 3000+offset, ports["web"])
-	}
-	if ports["redis"] != 6379+offset {
-		t.Errorf("expected redis %d, got %d", 6379+offset, ports["redis"])
-	}
-}
-
-func TestAllocatePorts_NeverCollidesWithBase(t *testing.T) {
-	basePorts := map[string]int{
-		"backend": 8000,
-	}
-
-	// Since offset is always >= 1, allocated port is always > base port
-	names := []string{"a", "b", "c", "test", "prod", "staging"}
-	for _, name := range names {
-		ports := AllocatePorts(name, basePorts)
-		if ports["backend"] <= 8000 {
-			t.Errorf("allocated port %d for '%s' collides with base port 8000", ports["backend"], name)
-		}
+	if ports["c"] != ports["b"]+1 {
+		t.Errorf("expected sequential ports: b=%d, c=%d", ports["b"], ports["c"])
 	}
 }

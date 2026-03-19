@@ -10,21 +10,21 @@ func TestValidateConfig_Valid(t *testing.T) {
 		Version: 1,
 		Name:    "myproject",
 		Core: CoreConfig{
-			Databases: map[string]DatabaseConfig{
-				"main": {Engine: "postgres", Image: "postgres:16", Port: 5500, User: "postgres", Password: "pass", TemplateDb: "dev_template"},
+			Services: map[string]CoreServiceConfig{
+				"main": {Outputs: []string{"connection_string", "host", "port", "user", "password", "database"}},
 			},
 		},
-		Infrastructure: map[string]InfraServiceConfig{
-			"redis": {Image: "redis:7-alpine", Port: 6379},
+		InfraServices: map[string]InfraService{
+			"redis": {Name: "redis", Image: "redis:7-alpine", Port: 6379},
 		},
 		Services: map[string]ServiceConfig{
-			"backend": {Path: "apps/backend", Port: 8000, DependsOn: []string{"redis"}, Env: map[string]string{
-				"PORT":         "{{ports.backend}}",
-				"DATABASE_URL": "{{core.databases.main.connectionString}}",
-				"REDIS":        "redis://localhost:{{ports.redis}}",
+			"backend": {Path: "apps/backend", DependsOn: []string{"redis"}, Env: map[string]string{
+				"PORT":         "{{services.backend.port}}",
+				"DATABASE_URL": "{{core.main.connection_string}}",
+				"REDIS":        "redis://localhost:{{infrastructure.redis.port}}",
 			}},
-			"web": {Path: "apps/web", Port: 3000, DependsOn: []string{"backend"}, Env: map[string]string{
-				"PORT": "{{ports.web}}",
+			"web": {Path: "apps/web", DependsOn: []string{"backend"}, Env: map[string]string{
+				"PORT": "{{services.web.port}}",
 			}},
 		},
 	}
@@ -38,9 +38,9 @@ func TestValidateConfig_PortCollisions(t *testing.T) {
 	cfg := &ProjectConfig{
 		Version: 1,
 		Name:    "test",
-		Services: map[string]ServiceConfig{
-			"a": {Path: "a", Port: 8000},
-			"b": {Path: "b", Port: 8000},
+		InfraServices: map[string]InfraService{
+			"redis1": {Name: "redis1", Image: "redis", Port: 6379},
+			"redis2": {Name: "redis2", Image: "redis", Port: 6379},
 		},
 	}
 
@@ -48,29 +48,8 @@ func TestValidateConfig_PortCollisions(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected port collision error")
 	}
-	if !strings.Contains(err.Error(), "base port 8000") {
+	if !strings.Contains(err.Error(), "base port 6379") {
 		t.Errorf("expected port collision message, got: %v", err)
-	}
-}
-
-func TestValidateConfig_PortCollisionAcrossTypes(t *testing.T) {
-	cfg := &ProjectConfig{
-		Version: 1,
-		Name:    "test",
-		Infrastructure: map[string]InfraServiceConfig{
-			"redis": {Image: "redis", Port: 8000},
-		},
-		Services: map[string]ServiceConfig{
-			"backend": {Path: "apps/backend", Port: 8000},
-		},
-	}
-
-	err := ValidateConfig(cfg)
-	if err == nil {
-		t.Fatal("expected port collision error")
-	}
-	if !strings.Contains(err.Error(), "base port 8000") {
-		t.Errorf("expected cross-type collision, got: %v", err)
 	}
 }
 
@@ -79,7 +58,7 @@ func TestValidateConfig_UnknownDependency(t *testing.T) {
 		Version: 1,
 		Name:    "test",
 		Services: map[string]ServiceConfig{
-			"web": {Path: "web", Port: 3000, DependsOn: []string{"nonexistent"}},
+			"web": {Path: "web", DependsOn: []string{"nonexistent"}},
 		},
 	}
 
@@ -97,7 +76,7 @@ func TestValidateConfig_SelfDependency(t *testing.T) {
 		Version: 1,
 		Name:    "test",
 		Services: map[string]ServiceConfig{
-			"web": {Path: "web", Port: 3000, DependsOn: []string{"web"}},
+			"web": {Path: "web", DependsOn: []string{"web"}},
 		},
 	}
 
@@ -115,8 +94,8 @@ func TestValidateConfig_DependencyCycle(t *testing.T) {
 		Version: 1,
 		Name:    "test",
 		Services: map[string]ServiceConfig{
-			"a": {Path: "a", Port: 8000, DependsOn: []string{"b"}},
-			"b": {Path: "b", Port: 8001, DependsOn: []string{"a"}},
+			"a": {Path: "a", DependsOn: []string{"b"}},
+			"b": {Path: "b", DependsOn: []string{"a"}},
 		},
 	}
 
@@ -136,11 +115,11 @@ func TestValidateConfig_InvalidTemplateVar(t *testing.T) {
 		errPart string
 	}{
 		{"unknown namespace", "{{foo.bar}}", "unknown template namespace"},
-		{"unknown port", "{{ports.nonexistent}}", "unknown port"},
-		{"unknown database", "{{core.databases.nope.host}}", "unknown database"},
-		{"unknown db field", "{{core.databases.main.nope}}", "unknown database field"},
-		{"bad core type", "{{core.caches.main.host}}", "unknown core type"},
-		{"malformed ports", "{{ports}}", "expected {{ports.<name>}}"},
+		{"unknown service", "{{services.nonexistent.port}}", "unknown service"},
+		{"unknown infra", "{{infrastructure.nonexistent.port}}", "unknown infrastructure"},
+		{"unknown core service", "{{core.nope.host}}", "unknown core service"},
+		{"unknown core output", "{{core.main.nope}}", "unknown output"},
+		{"malformed services", "{{services.backend}}", "expected {{services.<name>.port}}"},
 	}
 
 	for _, tt := range tests {
@@ -149,12 +128,12 @@ func TestValidateConfig_InvalidTemplateVar(t *testing.T) {
 				Version: 1,
 				Name:    "test",
 				Core: CoreConfig{
-					Databases: map[string]DatabaseConfig{
-						"main": {Engine: "postgres", Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t"},
+					Services: map[string]CoreServiceConfig{
+						"main": {Outputs: []string{"host", "port", "connection_string"}},
 					},
 				},
 				Services: map[string]ServiceConfig{
-					"svc": {Path: "svc", Port: 8000, Env: map[string]string{"VAR": tt.envVal}},
+					"svc": {Path: "svc", Env: map[string]string{"VAR": tt.envVal}},
 				},
 			}
 
@@ -166,54 +145,6 @@ func TestValidateConfig_InvalidTemplateVar(t *testing.T) {
 				t.Errorf("expected '%s' in error, got: %v", tt.errPart, err)
 			}
 		})
-	}
-}
-
-func TestValidateConfig_UnsupportedEngine(t *testing.T) {
-	cfg := &ProjectConfig{
-		Version: 1,
-		Name:    "test",
-		Core: CoreConfig{
-			Databases: map[string]DatabaseConfig{
-				"main": {Engine: "mysql", Image: "mysql:8", Port: 3306, User: "root", Password: "pass", TemplateDb: "tmpl"},
-			},
-		},
-		Services: map[string]ServiceConfig{
-			"svc": {Path: "svc", Port: 8000},
-		},
-	}
-
-	err := ValidateConfig(cfg)
-	if err == nil {
-		t.Fatal("expected unsupported engine error")
-	}
-	if !strings.Contains(err.Error(), "unsupported engine 'mysql'") {
-		t.Errorf("expected engine message, got: %v", err)
-	}
-}
-
-func TestValidateConfig_SeedStrategyMismatch(t *testing.T) {
-	cfg := &ProjectConfig{
-		Version: 1,
-		Name:    "test",
-		Core: CoreConfig{
-			Databases: map[string]DatabaseConfig{
-				"main": {Engine: "postgres", Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t",
-					Seed: &SeedConfig{Strategy: "snapshot"},
-				},
-			},
-		},
-		Services: map[string]ServiceConfig{
-			"svc": {Path: "svc", Port: 8000},
-		},
-	}
-
-	err := ValidateConfig(cfg)
-	if err == nil {
-		t.Fatal("expected error for snapshot without config")
-	}
-	if !strings.Contains(err.Error(), "requires 'snapshot' config") {
-		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -237,15 +168,15 @@ func TestValidateConfigWithFS_MissingPaths(t *testing.T) {
 	cfg := &ProjectConfig{
 		Version: 1,
 		Name:    "test",
-		Infrastructure: map[string]InfraServiceConfig{
-			"redis": {Image: "redis", Port: 6379},
+		InfraServices: map[string]InfraService{
+			"redis": {Name: "redis", Image: "redis", Port: 6379},
 		},
+		Infrastructure: &InfrastructureConfig{ComposeFile: "compose.worktree.yaml"},
 		Services: map[string]ServiceConfig{
-			"backend": {Path: "apps/backend", Port: 8000},
+			"backend": {Path: "apps/backend"},
 		},
 		Local: &LocalConfig{
-			ComposeFile: "compose.worktree.yaml",
-			Worktree:    WorktreeConfig{BasePath: "~/worktrees"},
+			Worktree: WorktreeConfig{},
 		},
 	}
 
@@ -261,7 +192,7 @@ func TestValidateConfigWithFS_MissingPaths(t *testing.T) {
 	hasCompose := false
 	hasServicePath := false
 	for _, e := range ve.Errors {
-		if strings.Contains(e, "composeFile") {
+		if strings.Contains(e, "compose_file") {
 			hasCompose = true
 		}
 		if strings.Contains(e, "path not found") {
@@ -280,15 +211,15 @@ func TestValidateConfigWithFS_AllExists(t *testing.T) {
 	cfg := &ProjectConfig{
 		Version: 1,
 		Name:    "test",
-		Infrastructure: map[string]InfraServiceConfig{
-			"redis": {Image: "redis", Port: 6379},
+		InfraServices: map[string]InfraService{
+			"redis": {Name: "redis", Image: "redis", Port: 6379},
 		},
+		Infrastructure: &InfrastructureConfig{ComposeFile: "compose.worktree.yaml"},
 		Services: map[string]ServiceConfig{
-			"backend": {Path: "apps/backend", Port: 8000},
+			"backend": {Path: "apps/backend"},
 		},
 		Local: &LocalConfig{
-			ComposeFile: "compose.worktree.yaml",
-			Worktree:    WorktreeConfig{BasePath: "~/worktrees"},
+			Worktree: WorktreeConfig{},
 		},
 	}
 

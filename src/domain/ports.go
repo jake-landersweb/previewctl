@@ -1,30 +1,8 @@
 package domain
 
-import "context"
-
-// DatabasePort manages per-environment database lifecycle.
-// Local: template cloning on shared Postgres.
-// Preview/Sandbox: Neon branching, RDS snapshot, or full pg_dump restore.
-type DatabasePort interface {
-	// EnsureInfrastructure ensures the database server is running and reachable.
-	EnsureInfrastructure(ctx context.Context) error
-
-	// SeedTemplate populates the template database from a snapshot or migration.
-	// snapshotPath is optional; adapters may use config defaults.
-	SeedTemplate(ctx context.Context, snapshotPath string) error
-
-	// CreateDatabase creates an isolated database for the given environment.
-	CreateDatabase(ctx context.Context, envName string) (*DatabaseInfo, error)
-
-	// DestroyDatabase drops the environment's database.
-	DestroyDatabase(ctx context.Context, envName string) error
-
-	// ResetDatabase drops and re-creates the environment's database.
-	ResetDatabase(ctx context.Context, envName string) (*DatabaseInfo, error)
-
-	// DatabaseExists checks if the environment's database exists.
-	DatabaseExists(ctx context.Context, envName string) (bool, error)
-}
+import (
+	"context"
+)
 
 // ComputePort manages the compute substrate for an environment.
 // Local: git worktree + docker compose for per-env infrastructure.
@@ -52,7 +30,7 @@ type ComputePort interface {
 // Preview: reverse proxy with subdomain routing (future).
 type NetworkingPort interface {
 	// AllocatePorts returns deterministic port assignments for all services and infrastructure.
-	AllocatePorts(envName string) PortMap
+	AllocatePorts(envName string) (PortMap, error)
 
 	// GetServiceURL returns the URL to reach a named service in the environment.
 	GetServiceURL(envName string, service string) (string, error)
@@ -61,7 +39,7 @@ type NetworkingPort interface {
 // EnvPort generates environment configuration files (.env.local, etc).
 type EnvPort interface {
 	// Generate writes .env.local files for all services in the environment.
-	Generate(ctx context.Context, envName string, workdir string, ports PortMap, databases map[string]*DatabaseInfo) error
+	Generate(ctx context.Context, envName string, workdir string, ports PortMap, coreOutputs map[string]map[string]string) error
 
 	// SymlinkSharedEnvFiles symlinks shared .env files from the main worktree.
 	SymlinkSharedEnvFiles(ctx context.Context, workdir string) error
@@ -87,9 +65,6 @@ type StatePort interface {
 
 	// RemoveEnvironment deletes an environment entry.
 	RemoveEnvironment(ctx context.Context, name string) error
-
-	// UpdateSnapshot updates snapshot metadata for a named database.
-	UpdateSnapshot(ctx context.Context, dbName string, info *SnapshotUpdate) error
 }
 
 // ProgressReporter receives lifecycle step events from the manager.

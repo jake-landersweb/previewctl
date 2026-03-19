@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/jake-landersweb/previewctl/src/domain"
 	"github.com/spf13/cobra"
@@ -39,17 +40,17 @@ func newVetCmd() *cobra.Command {
 			}
 
 			// Print summary of what was validated
-			dbCount := len(cfg.Core.Databases)
-			infraCount := len(cfg.Infrastructure)
+			coreCount := len(cfg.Core.Services)
+			infraCount := len(cfg.InfraServices)
 			svcCount := len(cfg.Services)
 
 			KeyValue("Version", fmt.Sprintf("%d", cfg.Version))
 			KeyValue("Services", fmt.Sprintf("%d", svcCount))
 			KeyValue("Infrastructure", fmt.Sprintf("%d", infraCount))
-			KeyValue("Databases", fmt.Sprintf("%d", dbCount))
+			KeyValue("Core services", fmt.Sprintf("%d", coreCount))
 
-			if cfg.Local != nil && cfg.Local.ComposeFile != "" {
-				KeyValue("Compose file", cfg.Local.ComposeFile)
+			if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile != "" {
+				KeyValue("Compose file", cfg.Infrastructure.ComposeFile)
 			}
 
 			// Count total env vars and template refs
@@ -59,19 +60,23 @@ func newVetCmd() *cobra.Command {
 			}
 			KeyValue("Env vars", fmt.Sprintf("%d across %d services", envVarCount, svcCount))
 
-			// Show base port range
-			ports := cfg.AllBasePorts()
-			minPort, maxPort := 0, 0
-			for _, p := range ports {
-				if minPort == 0 || p < minPort {
-					minPort = p
-				}
-				if p > maxPort {
-					maxPort = p
-				}
+			// Check Docker
+			dockerStatus := "running"
+			if err := exec.Command("docker", "info").Run(); err != nil {
+				dockerStatus = "not running"
 			}
-			if len(ports) > 0 {
-				KeyValue("Port range", fmt.Sprintf("%d–%d (%d ports)", minPort, maxPort, len(ports)))
+			KeyValue("Docker", dockerStatus)
+			if dockerStatus == "not running" {
+				fmt.Fprintf(os.Stderr, "  %s %s\n",
+					styleSkipped.Render("⚠"),
+					styleSkipped.Render("Docker daemon is not running — previewctl requires Docker for infrastructure"),
+				)
+			}
+
+			// Show port allocation info
+			serviceNames := cfg.ServiceNames()
+			if len(serviceNames) > 0 {
+				KeyValue("Port allocation", fmt.Sprintf("%d services, range 61000–65000", len(serviceNames)))
 			}
 
 			Success("Configuration is valid")

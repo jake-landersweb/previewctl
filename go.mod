@@ -4,7 +4,6 @@ go 1.26.0
 
 require (
 	charm.land/lipgloss/v2 v2.0.2
-	github.com/lib/pq v1.12.0
 	github.com/spf13/cobra v1.10.2
 	github.com/testcontainers/testcontainers-go v0.41.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.41.0
@@ -44,6 +43,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
+	github.com/lib/pq v1.12.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect

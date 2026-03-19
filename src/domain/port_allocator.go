@@ -1,27 +1,85 @@
 package domain
 
-import "hash/fnv"
-
-const (
-	// maxOffset is the upper bound of the port offset range (inclusive).
-	maxOffset = 200
+import (
+	"fmt"
+	"hash/fnv"
+	"net"
+	"sort"
 )
 
-// AllocatePortOffset computes a deterministic port offset from an environment name
-// using FNV-1a hashing. The offset is in the range [1, maxOffset].
-func AllocatePortOffset(envName string) int {
-	h := fnv.New32a()
-	h.Write([]byte(envName))
-	return int(h.Sum32()%uint32(maxOffset)) + 1
+const (
+	portRangeStart = 61000
+	portRangeEnd   = 65000
+	portsPerEnv    = 100
+)
+
+// maxEnvironments is the number of environment blocks that fit in the range.
+var maxEnvironments = (portRangeEnd - portRangeStart) / portsPerEnv
+
+// AllocatePortBlock selects a block of ports for an environment and assigns
+// one port per service name. Ports are checked for availability.
+// Returns a PortMap with service names mapped to allocated ports.
+func AllocatePortBlock(envName string, serviceNames []string) (PortMap, error) {
+	blockStart := pickBlockStart(envName)
+
+	ports := make(PortMap, len(serviceNames))
+
+	// Sort service names for deterministic assignment
+	sorted := make([]string, len(serviceNames))
+	copy(sorted, serviceNames)
+	sort.Strings(sorted)
+
+	offset := 0
+	for _, name := range sorted {
+		port := blockStart + offset
+		if port >= blockStart+portsPerEnv {
+			return nil, fmt.Errorf("too many services (%d) for port block size (%d)", len(serviceNames), portsPerEnv)
+		}
+
+		// Find a free port within the block
+		for !isPortFree(port) {
+			offset++
+			port = blockStart + offset
+			if port >= blockStart+portsPerEnv {
+				return nil, fmt.Errorf("could not find free ports in block %d-%d", blockStart, blockStart+portsPerEnv-1)
+			}
+		}
+
+		ports[name] = port
+		offset++
+	}
+
+	return ports, nil
 }
 
-// AllocatePorts applies a deterministic offset to all base ports for the given
-// environment name.
-func AllocatePorts(envName string, basePorts map[string]int) PortMap {
-	offset := AllocatePortOffset(envName)
-	ports := make(PortMap, len(basePorts))
-	for name, base := range basePorts {
-		ports[name] = base + offset
+// pickBlockStart deterministically selects a block start from the environment name.
+func pickBlockStart(envName string) int {
+	h := fnv.New32a()
+	h.Write([]byte(envName))
+	blockIndex := int(h.Sum32()) % maxEnvironments
+	return portRangeStart + (blockIndex * portsPerEnv)
+}
+
+// isPortFree checks if a TCP port is available by attempting to listen on it.
+func isPortFree(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return false
 	}
-	return ports
+	_ = ln.Close()
+	return true
+}
+
+// ServiceNames returns a sorted list of all service and infrastructure names
+// that need port assignments.
+func (c *ProjectConfig) ServiceNames() []string {
+	names := make([]string, 0, len(c.Services)+len(c.InfraServices))
+	for name := range c.Services {
+		names = append(names, name)
+	}
+	for name := range c.InfraServices {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

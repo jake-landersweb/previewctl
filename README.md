@@ -61,56 +61,40 @@ Create a `previewctl.yaml` in your project root:
 ```yaml
 version: 1
 name: myproject
-packageManager: pnpm  # optional
 
 core:
-  databases:
-    main:
-      engine: postgres
-      image: postgres:16
-      port: 5432
-      user: postgres
-      password: postgres
-      templateDb: template_db
-      seed:
-        strategy: snapshot
-        snapshot:
-          source: local
-        script: schema/seed.sql
+  services:
+    postgres:
+      outputs: [CONNECTION_STRING, DB_HOST, DB_PORT]
 
 infrastructure:
-  redis:
-    image: redis:7-alpine
-    port: 6379
+  compose_file: compose.worktree.yaml
 
 services:
   backend:
     path: apps/backend
-    port: 8000
     command: pnpm dev
-    dependsOn: [redis]
+    depends_on: [redis]
     env:
-      PORT: "{{ports.backend}}"
-      DATABASE_URL: "{{databases.main}}"
+      PORT: "{{services.backend.port}}"
+      DATABASE_URL: "{{core.postgres.CONNECTION_STRING}}"
+      REDIS_PORT: "{{infrastructure.redis.port}}"
 
   web:
     path: apps/web
-    port: 3000
-    dependsOn: [backend]
+    depends_on: [backend]
     env:
-      NEXT_PUBLIC_API_URL: "http://localhost:{{ports.backend}}"
+      NEXT_PUBLIC_API_URL: "http://localhost:{{services.backend.port}}"
 
 local:
   worktree:
-    basePath: ~/worktrees
-    symlinkPatterns: [".env", ".env.*"]
-  composeFile: compose.worktree.yaml
+    symlink_patterns: [".env", ".env.*"]
 
 hooks:
   create:
     after:
       - run: npm run migrate
-        continueOnError: true
+        continue_on_error: true
 ```
 
 ### Template variables
@@ -119,15 +103,28 @@ Use these in service `env` values:
 
 | Variable | Description |
 |---|---|
-| `{{ports.<service>}}` | Allocated port for a service |
-| `{{databases.<name>}}` | Connection string for a database |
-| `{{env.<VAR>}}` | Value from an existing environment variable |
+| `{{services.<name>.port}}` | Allocated port for an application service |
+| `{{infrastructure.<name>.port}}` | Allocated port for an infrastructure service |
+| `{{core.<service>.<OUTPUT>}}` | Output from a core service hook (e.g., `{{core.postgres.CONNECTION_STRING}}`) |
+
+### Core services
+
+Core services are long-lived services (databases, caches, etc.) managed via lifecycle hooks. Declare outputs in `previewctl.yaml`, define hooks in overlay files (`previewctl.local.yaml`, `previewctl.remote.yaml`).
+
+Hooks write `KEY=VALUE` pairs to stdout. Outputs are validated against the declared list and made available as template variables.
+
+| Hook | When | Example |
+|------|------|---------|
+| `init` | `previewctl core <name> init` | Create template DB |
+| `seed` | During `previewctl create` | Clone from template |
+| `reset` | `previewctl core <name> reset [env]` | Drop + re-clone |
+| `destroy` | During `previewctl delete` | Drop database |
 
 ### Hooks
 
-Hooks can be attached to any lifecycle step: `allocate_ports`, `create_compute`, `ensure_database`, `clone_database`, `symlink_env`, `generate_env`, `start_infra`, `save_state`, and top-level `create`/`delete`/`reset`.
+Hooks can be attached to lifecycle steps: `allocate_ports`, `create_compute`, `symlink_env`, `generate_env`, `start_infra`, `save_state`, and top-level `create`/`delete`.
 
-Scripts receive context via environment variables: `PREVIEWCTL_ENV_NAME`, `PREVIEWCTL_BRANCH`, `PREVIEWCTL_WORKTREE_PATH`, `PREVIEWCTL_STEP`, `PREVIEWCTL_PHASE`, plus port and database info as JSON.
+Scripts receive context via environment variables: `PREVIEWCTL_ENV_NAME`, `PREVIEWCTL_BRANCH`, `PREVIEWCTL_WORKTREE_PATH`, `PREVIEWCTL_STEP`, `PREVIEWCTL_PHASE`, plus port and core output info.
 
 ## How it works
 

@@ -10,33 +10,43 @@ import (
 func TestNetworkingAdapter_AllocatePorts(t *testing.T) {
 	cfg := &domain.ProjectConfig{
 		Services: map[string]domain.ServiceConfig{
-			"backend": {Path: "apps/backend", Port: 8000},
-			"web":     {Path: "apps/web", Port: 3000},
+			"backend": {Path: "apps/backend"},
+			"web":     {Path: "apps/web"},
 		},
-		Infrastructure: map[string]domain.InfraServiceConfig{
-			"redis": {Image: "redis:7-alpine", Port: 6379},
+		InfraServices: map[string]domain.InfraService{
+			"redis": {Name: "redis", Image: "redis:7-alpine", Port: 6379},
 		},
 	}
 
 	adapter := NewNetworkingAdapter(cfg)
-	ports := adapter.AllocatePorts("feat-auth")
+	ports, err := adapter.AllocatePorts("feat-auth")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	offset := domain.AllocatePortOffset("feat-auth")
-	if ports["backend"] != 8000+offset {
-		t.Errorf("expected backend %d, got %d", 8000+offset, ports["backend"])
+	// All ports should be in the 61000-65000 range
+	for name, port := range ports {
+		if port < 61000 || port >= 65000 {
+			t.Errorf("port for '%s' is %d, expected in [61000, 65000)", name, port)
+		}
 	}
-	if ports["web"] != 3000+offset {
-		t.Errorf("expected web %d, got %d", 3000+offset, ports["web"])
+
+	// Should have ports for all services and infra
+	if _, ok := ports["backend"]; !ok {
+		t.Error("expected port for 'backend'")
 	}
-	if ports["redis"] != 6379+offset {
-		t.Errorf("expected redis %d, got %d", 6379+offset, ports["redis"])
+	if _, ok := ports["web"]; !ok {
+		t.Error("expected port for 'web'")
+	}
+	if _, ok := ports["redis"]; !ok {
+		t.Error("expected port for 'redis'")
 	}
 }
 
 func TestNetworkingAdapter_GetServiceURL(t *testing.T) {
 	cfg := &domain.ProjectConfig{
 		Services: map[string]domain.ServiceConfig{
-			"backend": {Path: "apps/backend", Port: 8000},
+			"backend": {Path: "apps/backend"},
 		},
 	}
 
@@ -46,8 +56,9 @@ func TestNetworkingAdapter_GetServiceURL(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	offset := domain.AllocatePortOffset("feat-auth")
-	expected := "http://localhost:" + itoa(8000+offset)
+	// URL should be http://localhost:<port> with port in range
+	ports, _ := adapter.AllocatePorts("feat-auth")
+	expected := "http://localhost:" + itoa(ports["backend"])
 	if url != expected {
 		t.Errorf("expected '%s', got '%s'", expected, url)
 	}

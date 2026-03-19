@@ -7,24 +7,27 @@ import (
 )
 
 // NetworkingAdapter implements domain.NetworkingPort for local development.
-// It uses deterministic FNV-1a port allocation from the domain layer.
+// It uses deterministic FNV-1a port block allocation from the domain layer.
 type NetworkingAdapter struct {
-	basePorts map[string]int
+	serviceNames []string
 }
 
 // NewNetworkingAdapter creates a new local networking adapter.
 func NewNetworkingAdapter(config *domain.ProjectConfig) *NetworkingAdapter {
 	return &NetworkingAdapter{
-		basePorts: config.AllBasePorts(),
+		serviceNames: config.ServiceNames(),
 	}
 }
 
-func (a *NetworkingAdapter) AllocatePorts(envName string) domain.PortMap {
-	return domain.AllocatePorts(envName, a.basePorts)
+func (a *NetworkingAdapter) AllocatePorts(envName string) (domain.PortMap, error) {
+	return domain.AllocatePortBlock(envName, a.serviceNames)
 }
 
 func (a *NetworkingAdapter) GetServiceURL(envName string, service string) (string, error) {
-	ports := a.AllocatePorts(envName)
+	ports, err := a.AllocatePorts(envName)
+	if err != nil {
+		return "", fmt.Errorf("allocating ports: %w", err)
+	}
 	port, ok := ports[service]
 	if !ok {
 		return "", fmt.Errorf("unknown service '%s'", service)

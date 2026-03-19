@@ -2,7 +2,6 @@ package domain
 
 import (
 	"context"
-	"fmt"
 	"testing"
 )
 
@@ -15,49 +14,6 @@ func (t *mockTracker) record(call string) {
 	t.calls = append(t.calls, call)
 }
 
-// mockDatabasePort implements DatabasePort
-type mockDatabasePort struct {
-	tracker *mockTracker
-	name    string
-}
-
-func (m *mockDatabasePort) EnsureInfrastructure(_ context.Context) error {
-	m.tracker.record(fmt.Sprintf("db.%s.EnsureInfrastructure", m.name))
-	return nil
-}
-
-func (m *mockDatabasePort) SeedTemplate(_ context.Context, path string) error {
-	m.tracker.record(fmt.Sprintf("db.%s.SeedTemplate", m.name))
-	return nil
-}
-
-func (m *mockDatabasePort) CreateDatabase(_ context.Context, envName string) (*DatabaseInfo, error) {
-	m.tracker.record(fmt.Sprintf("db.%s.CreateDatabase", m.name))
-	return &DatabaseInfo{
-		Host:             "localhost",
-		Port:             5500,
-		User:             "postgres",
-		Password:         "postgres",
-		Database:         fmt.Sprintf("wt_%s", envName),
-		ConnectionString: fmt.Sprintf("postgresql://postgres:postgres@localhost:5500/wt_%s", envName),
-	}, nil
-}
-
-func (m *mockDatabasePort) DestroyDatabase(_ context.Context, envName string) error {
-	m.tracker.record(fmt.Sprintf("db.%s.DestroyDatabase", m.name))
-	return nil
-}
-
-func (m *mockDatabasePort) ResetDatabase(_ context.Context, envName string) (*DatabaseInfo, error) {
-	m.tracker.record(fmt.Sprintf("db.%s.ResetDatabase", m.name))
-	return &DatabaseInfo{Database: fmt.Sprintf("wt_%s", envName)}, nil
-}
-
-func (m *mockDatabasePort) DatabaseExists(_ context.Context, envName string) (bool, error) {
-	m.tracker.record(fmt.Sprintf("db.%s.DatabaseExists", m.name))
-	return true, nil
-}
-
 // mockComputePort implements ComputePort
 type mockComputePort struct {
 	tracker *mockTracker
@@ -66,7 +22,7 @@ type mockComputePort struct {
 func (m *mockComputePort) Create(_ context.Context, envName string, branch string) (*ComputeResources, error) {
 	m.tracker.record("compute.Create")
 	return &ComputeResources{
-		WorktreePath: fmt.Sprintf("/worktrees/%s", envName),
+		WorktreePath: "/worktrees/" + envName,
 	}, nil
 }
 
@@ -95,13 +51,13 @@ type mockNetworkingPort struct {
 	tracker *mockTracker
 }
 
-func (m *mockNetworkingPort) AllocatePorts(envName string) PortMap {
+func (m *mockNetworkingPort) AllocatePorts(envName string) (PortMap, error) {
 	m.tracker.record("networking.AllocatePorts")
-	return PortMap{"backend": 8042, "web": 3042}
+	return PortMap{"backend": 8042, "web": 3042}, nil
 }
 
 func (m *mockNetworkingPort) GetServiceURL(envName string, service string) (string, error) {
-	return fmt.Sprintf("http://localhost:%d", 8042), nil
+	return "http://localhost:8042", nil
 }
 
 // mockEnvPort implements EnvPort
@@ -109,7 +65,7 @@ type mockEnvPort struct {
 	tracker *mockTracker
 }
 
-func (m *mockEnvPort) Generate(_ context.Context, envName string, workdir string, ports PortMap, databases map[string]*DatabaseInfo) error {
+func (m *mockEnvPort) Generate(_ context.Context, envName string, workdir string, ports PortMap, coreOutputs map[string]map[string]string) error {
 	m.tracker.record("env.Generate")
 	return nil
 }
@@ -128,14 +84,12 @@ func (m *mockEnvPort) Cleanup(_ context.Context, workdir string) error {
 type mockStatePort struct {
 	tracker      *mockTracker
 	environments map[string]*EnvironmentEntry
-	snapshots    map[string]*SnapshotState
 }
 
 func newMockStatePort(tracker *mockTracker) *mockStatePort {
 	return &mockStatePort{
 		tracker:      tracker,
 		environments: make(map[string]*EnvironmentEntry),
-		snapshots:    make(map[string]*SnapshotState),
 	}
 }
 
@@ -144,7 +98,6 @@ func (m *mockStatePort) Load(_ context.Context) (*State, error) {
 	return &State{
 		Version:      1,
 		Environments: m.environments,
-		Snapshots:    m.snapshots,
 	}, nil
 }
 
@@ -171,11 +124,6 @@ func (m *mockStatePort) RemoveEnvironment(_ context.Context, name string) error 
 	return nil
 }
 
-func (m *mockStatePort) UpdateSnapshot(_ context.Context, dbName string, info *SnapshotUpdate) error {
-	m.tracker.record("state.UpdateSnapshot")
-	return nil
-}
-
 // mockProgressReporter captures step events
 type mockProgressReporter struct {
 	events []StepEvent
@@ -190,15 +138,14 @@ func newTestManager(tracker *mockTracker) (*Manager, *mockStatePort, *mockProgre
 	progress := &mockProgressReporter{}
 
 	mgr := NewManager(ManagerDeps{
-		Databases: map[string]DatabasePort{
-			"main": &mockDatabasePort{tracker: tracker, name: "main"},
-		},
 		Compute:    &mockComputePort{tracker: tracker},
 		Networking: &mockNetworkingPort{tracker: tracker},
 		EnvGen:     &mockEnvPort{tracker: tracker},
 		State:      statePort,
 		Progress:   progress,
-		Config:     &ProjectConfig{Name: "myproject"},
+		Config: &ProjectConfig{
+			Name: "myproject",
+		},
 	})
 
 	return mgr, statePort, progress
@@ -217,8 +164,6 @@ func TestManager_Init_CallOrder(t *testing.T) {
 	expectedOrder := []string{
 		"networking.AllocatePorts",
 		"compute.Create",
-		"db.main.EnsureInfrastructure",
-		"db.main.CreateDatabase",
 		"env.SymlinkSharedEnvFiles",
 		"env.Generate",
 		"compute.Start",
@@ -274,7 +219,6 @@ func TestManager_Destroy_CallOrder(t *testing.T) {
 	expectedOrder := []string{
 		"state.GetEnvironment",
 		"compute.Destroy",
-		"db.main.DestroyDatabase",
 		"env.Cleanup",
 		"state.RemoveEnvironment",
 	}
@@ -332,9 +276,6 @@ func TestManager_Status(t *testing.T) {
 	if !detail.InfraRunning {
 		t.Error("expected infra running")
 	}
-	if !detail.DatabaseExists["main"] {
-		t.Error("expected database to exist")
-	}
 }
 
 func TestManager_Init_EmitsProgressEvents(t *testing.T) {
@@ -380,54 +321,149 @@ func TestManager_Init_EmitsProgressEvents(t *testing.T) {
 	}
 }
 
-func TestManager_SeedTemplate(t *testing.T) {
+func newTestManagerWithCoreServices(t *testing.T, tracker *mockTracker) (*Manager, *mockStatePort, *mockProgressReporter) {
+	t.Helper()
+	statePort := newMockStatePort(tracker)
+	progress := &mockProgressReporter{}
+
+	mgr := NewManager(ManagerDeps{
+		Compute:     &mockComputePort{tracker: tracker},
+		Networking:  &mockNetworkingPort{tracker: tracker},
+		EnvGen:      &mockEnvPort{tracker: tracker},
+		State:       statePort,
+		Progress:    progress,
+		ProjectRoot: t.TempDir(),
+		Config: &ProjectConfig{
+			Name: "myproject",
+			Core: CoreConfig{
+				Services: map[string]CoreServiceConfig{
+					"postgres": {
+						Outputs: []string{"CONNECTION_STRING", "DB_HOST"},
+						Hooks: &CoreServiceHooks{
+							Init:    `echo "CONNECTION_STRING=postgresql://localhost:5432/db"; echo "DB_HOST=localhost"`,
+							Seed:    `echo "CONNECTION_STRING=postgresql://localhost:5432/wt_${PREVIEWCTL_ENV_NAME}"; echo "DB_HOST=localhost"`,
+							Reset:   `echo "CONNECTION_STRING=postgresql://localhost:5432/wt_${PREVIEWCTL_ENV_NAME}"; echo "DB_HOST=localhost"`,
+							Destroy: `echo "destroyed" >&2`,
+						},
+					},
+				},
+			},
+		},
+	})
+
+	return mgr, statePort, progress
+}
+
+func TestManager_CoreInit(t *testing.T) {
 	tracker := &mockTracker{}
-	mgr, _, _ := newTestManager(tracker)
+	mgr, _, _ := newTestManagerWithCoreServices(t, tracker)
 	ctx := context.Background()
 
-	err := mgr.SeedTemplate(ctx, "main", "/path/to/snapshot")
+	err := mgr.CoreInit(ctx, "postgres")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	expectedCalls := []string{
-		"db.main.EnsureInfrastructure",
-		"db.main.SeedTemplate",
-		"state.UpdateSnapshot",
-	}
-
-	if len(tracker.calls) != len(expectedCalls) {
-		t.Fatalf("expected %d calls, got %d: %v", len(expectedCalls), len(tracker.calls), tracker.calls)
-	}
-	for i, expected := range expectedCalls {
-		if tracker.calls[i] != expected {
-			t.Errorf("call %d: expected '%s', got '%s'", i, expected, tracker.calls[i])
-		}
-	}
 }
 
-func TestManager_ResetDatabase(t *testing.T) {
+func TestManager_CoreInit_UnknownService(t *testing.T) {
 	tracker := &mockTracker{}
-	mgr, _, _ := newTestManager(tracker)
+	mgr, _, _ := newTestManagerWithCoreServices(t, tracker)
 	ctx := context.Background()
 
-	err := mgr.ResetDatabase(ctx, "feat-auth", "main")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(tracker.calls) != 1 || tracker.calls[0] != "db.main.ResetDatabase" {
-		t.Errorf("expected [db.main.ResetDatabase], got %v", tracker.calls)
-	}
-}
-
-func TestManager_ResetDatabase_UnknownDB(t *testing.T) {
-	tracker := &mockTracker{}
-	mgr, _, _ := newTestManager(tracker)
-	ctx := context.Background()
-
-	err := mgr.ResetDatabase(ctx, "feat-auth", "unknown")
+	err := mgr.CoreInit(ctx, "nonexistent")
 	if err == nil {
-		t.Fatal("expected error for unknown database")
+		t.Fatal("expected error for unknown core service")
+	}
+}
+
+func TestManager_CoreReset(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManagerWithCoreServices(t, tracker)
+	ctx := context.Background()
+
+	// Pre-populate state
+	statePort.environments["feat-auth"] = &EnvironmentEntry{
+		Name:  "feat-auth",
+		Ports: PortMap{"backend": 61000},
+		CoreOutputs: map[string]map[string]string{
+			"postgres": {"CONNECTION_STRING": "old", "DB_HOST": "old"},
+		},
+	}
+
+	err := mgr.CoreReset(ctx, "postgres", "feat-auth")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify outputs were updated in state
+	entry := statePort.environments["feat-auth"]
+	if entry.CoreOutputs["postgres"]["DB_HOST"] != "localhost" {
+		t.Errorf("expected updated DB_HOST, got '%s'", entry.CoreOutputs["postgres"]["DB_HOST"])
+	}
+}
+
+func TestManager_CoreReset_MissingEnv(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, _, _ := newTestManagerWithCoreServices(t, tracker)
+	ctx := context.Background()
+
+	err := mgr.CoreReset(ctx, "postgres", "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent environment")
+	}
+}
+
+func TestManager_Init_WithCoreServices(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, _, _ := newTestManagerWithCoreServices(t, tracker)
+	ctx := context.Background()
+
+	entry, err := mgr.Init(ctx, "feat-db", "feat-db")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify core outputs were captured and stored
+	if entry.CoreOutputs == nil {
+		t.Fatal("expected CoreOutputs to be populated")
+	}
+	pgOutputs, ok := entry.CoreOutputs["postgres"]
+	if !ok {
+		t.Fatal("expected postgres outputs")
+	}
+	if pgOutputs["DB_HOST"] != "localhost" {
+		t.Errorf("expected DB_HOST=localhost, got '%s'", pgOutputs["DB_HOST"])
+	}
+	if pgOutputs["CONNECTION_STRING"] == "" {
+		t.Error("expected CONNECTION_STRING to be set")
+	}
+}
+
+func TestManager_Destroy_WithCoreServices(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManagerWithCoreServices(t, tracker)
+	ctx := context.Background()
+
+	statePort.environments["feat-db"] = &EnvironmentEntry{
+		Name:  "feat-db",
+		Ports: PortMap{"backend": 61000},
+		Local: &LocalMeta{
+			WorktreePath:       "/tmp/worktrees/feat-db",
+			ComposeProjectName: "myproject-feat-db",
+		},
+		CoreOutputs: map[string]map[string]string{
+			"postgres": {"CONNECTION_STRING": "test"},
+		},
+	}
+
+	tracker.calls = nil
+	err := mgr.Destroy(ctx, "feat-db")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify state was cleaned up
+	if _, ok := statePort.environments["feat-db"]; ok {
+		t.Error("expected environment to be removed from state")
 	}
 }
