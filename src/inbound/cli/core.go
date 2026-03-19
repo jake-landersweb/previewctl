@@ -5,27 +5,65 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/jake-landersweb/previewctl/src/domain"
 	"github.com/spf13/cobra"
 )
 
-func newDbCmd() *cobra.Command {
+
+func newCoreCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "db",
-		Short: "Manage template and environment databases",
+		Use:   "core",
+		Short: "Manage core services (databases, etc.)",
+		Long:  "Manage core services defined in your previewctl.yaml. Run 'previewctl core <name> --help' to see available actions.",
 	}
 
-	cmd.AddCommand(
-		newDbSeedCmd(),
-		newDbResetCmd(),
-	)
+	// Try to load config and add dynamic subcommands at construction time.
+	// This allows cobra to show them in --help. If config isn't found
+	// (e.g., running from outside a project), the command still works
+	// but shows no subcommands.
+	if cfg, _, err := loadConfig(); err == nil {
+		addCoreDatabaseCommands(cmd, cfg)
+	}
 
 	return cmd
 }
 
-func newDbSeedCmd() *cobra.Command {
-	var dbName string
+// addCoreDatabaseCommands adds a subcommand for each database in the config.
+func addCoreDatabaseCommands(parent *cobra.Command, cfg *domain.ProjectConfig) {
+	for name, db := range cfg.Core.Databases {
+		dbCmd := newCoreDatabaseCmd(name, db)
+		parent.AddCommand(dbCmd)
+	}
+}
+
+func newCoreDatabaseCmd(name string, db domain.DatabaseConfig) *cobra.Command {
+	provider := "unknown"
+	if db.Local != nil {
+		provider = db.Local.Provider
+		if provider == "" {
+			provider = "docker"
+		}
+	}
 
 	cmd := &cobra.Command{
+		Use:   name,
+		Short: fmt.Sprintf("Manage %s (%s, %s)", name, db.Engine, provider),
+	}
+
+	// Add engine-specific actions
+	switch db.Engine {
+	case "postgres":
+		cmd.AddCommand(
+			newCoreSeedCmd(name),
+			newCoreResetCmd(name),
+		)
+	}
+
+	return cmd
+}
+
+func newCoreSeedCmd(dbName string) *cobra.Command {
+	return &cobra.Command{
 		Use:   "seed",
 		Short: "Populate the shared template database (all new environments clone from this)",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -33,10 +71,6 @@ func newDbSeedCmd() *cobra.Command {
 			mgr, cfg, err := buildManager(progress)
 			if err != nil {
 				return err
-			}
-
-			if dbName == "" {
-				dbName = "main"
 			}
 
 			templateDb := cfg.Core.Databases[dbName].Local.TemplateDb
@@ -53,17 +87,11 @@ func newDbSeedCmd() *cobra.Command {
 			return nil
 		},
 	}
-
-	cmd.Flags().StringVar(&dbName, "db", "main", "Database name from config")
-
-	return cmd
 }
 
-func newDbResetCmd() *cobra.Command {
-	var dbName string
-
-	cmd := &cobra.Command{
-		Use:   "reset [name]",
+func newCoreResetCmd(dbName string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "reset [env]",
 		Short: "Drop and re-clone an environment's database from the template",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -81,10 +109,6 @@ func newDbResetCmd() *cobra.Command {
 				return fmt.Errorf("could not determine environment: %w", err)
 			}
 
-			if dbName == "" {
-				dbName = "main"
-			}
-
 			templateDb := cfg.Core.Databases[dbName].Local.TemplateDb
 			Header(fmt.Sprintf("Resetting %s database for %s",
 				styleDetail.Render(dbName),
@@ -100,8 +124,4 @@ func newDbResetCmd() *cobra.Command {
 			return nil
 		},
 	}
-
-	cmd.Flags().StringVar(&dbName, "db", "main", "Database name from config")
-
-	return cmd
 }
