@@ -17,7 +17,7 @@ type TemplateContext struct {
 // RenderTemplate replaces {{var}} placeholders in a string with values from the context.
 // Supported variable patterns:
 //   - {{ports.<service>}} — allocated port for a service
-//   - {{core.databases.<name>.connectionString}} — database connection string
+//   - {{core.databases.<name>.connection_string}} — database connection string
 //   - {{core.databases.<name>.host}} — database host
 //   - {{core.databases.<name>.port}} — database port
 //   - {{core.databases.<name>.user}} — database user
@@ -102,7 +102,7 @@ func resolveCoreVar(parts []string, ctx *TemplateContext) (string, error) {
 
 	field := parts[2]
 	switch field {
-	case "connectionString":
+	case "connection_string":
 		return db.ConnectionString, nil
 	case "host":
 		return db.Host, nil

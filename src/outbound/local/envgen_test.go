@@ -24,7 +24,7 @@ func TestEnvGenAdapter_Generate(t *testing.T) {
 				Port: 8000,
 				Env: map[string]string{
 					"PORT":         "{{ports.backend}}",
-					"DATABASE_URL": "{{core.databases.main.connectionString}}",
+					"DATABASE_URL": "{{core.databases.main.connection_string}}",
 				},
 			},
 			"web": {

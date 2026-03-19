@@ -27,7 +27,7 @@ type StepHooks struct {
 // HookDef defines a single hook to execute.
 type HookDef struct {
 	Run             string `yaml:"run"`
-	ContinueOnError bool   `yaml:"continueOnError,omitempty"`
+	ContinueOnError bool   `yaml:"continue_on_error,omitempty"`
 }
 
 // HookContext provides environment variables and working directory for hook execution.

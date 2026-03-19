@@ -3,20 +3,25 @@ package domain
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
 
 // ProjectConfig is the top-level previewctl.yaml configuration.
 type ProjectConfig struct {
-	Version        int                           `yaml:"version"`
-	Name           string                        `yaml:"name"`
-	PackageManager string                        `yaml:"packageManager,omitempty"`
-	Core           CoreConfig                    `yaml:"core"`
-	Infrastructure map[string]InfraServiceConfig `yaml:"infrastructure,omitempty"`
-	Services       map[string]ServiceConfig      `yaml:"services"`
-	Local          *LocalConfig                  `yaml:"local,omitempty"`
-	Hooks          HooksConfig                   `yaml:"hooks,omitempty"`
+	Version        int                        `yaml:"version"`
+	Name           string                     `yaml:"name"`
+	PackageManager string                     `yaml:"package_manager,omitempty"`
+	Core           CoreConfig                 `yaml:"core"`
+	Infrastructure *InfrastructureConfig      `yaml:"infrastructure,omitempty"`
+	Services       map[string]ServiceConfig   `yaml:"services"`
+	Local          *LocalConfig               `yaml:"local,omitempty"`
+	Hooks          HooksConfig                `yaml:"hooks,omitempty"`
+
+	// InfraServices is populated by parsing the compose file referenced in
+	// Infrastructure.ComposeFile. It is not read from YAML directly.
+	InfraServices map[string]InfraService `yaml:"-"`
 }
 
 // CoreConfig holds managed services requiring engine-specific lifecycle.
@@ -24,36 +29,44 @@ type CoreConfig struct {
 	Databases map[string]DatabaseConfig `yaml:"databases,omitempty"`
 }
 
-// DatabaseConfig defines a core database.
+// DatabaseConfig defines a core database. Engine is constant;
+// provider and seed config vary by deployment mode.
 type DatabaseConfig struct {
-	Engine     string      `yaml:"engine"`
-	Image      string      `yaml:"image"`
-	Port       int         `yaml:"port"`
-	User       string      `yaml:"user"`
-	Password   string      `yaml:"password"`
-	TemplateDb string      `yaml:"templateDb"`
-	Seed       *SeedConfig `yaml:"seed,omitempty"`
+	Engine string              `yaml:"engine"`
+	Local  *DatabaseModeConfig `yaml:"local,omitempty"`
+	// Remote *DatabaseModeConfig `yaml:"remote,omitempty"` // future
 }
 
-// SeedConfig defines how a database template is seeded.
-type SeedConfig struct {
-	Strategy string          `yaml:"strategy"`
-	Snapshot *SnapshotConfig `yaml:"snapshot,omitempty"`
-	Script   string          `yaml:"script,omitempty"`
+// DatabaseModeConfig holds provider-specific config for a deployment mode.
+type DatabaseModeConfig struct {
+	Provider   string     `yaml:"provider"`              // "docker", "neon", "remote"
+	Image      string     `yaml:"image,omitempty"`       // docker
+	Port       int        `yaml:"port,omitempty"`        // docker, remote
+	User       string     `yaml:"user,omitempty"`        // docker, remote
+	Password   string     `yaml:"password,omitempty"`    // docker, remote
+	TemplateDb string     `yaml:"template_db,omitempty"`  // docker, remote
+	Seed       []SeedStep `yaml:"seed,omitempty"`        // ordered pipeline
 }
 
-// SnapshotConfig defines S3 snapshot source.
-type SnapshotConfig struct {
-	Source string `yaml:"source"`
+// SeedStep is a single step in the seed pipeline.
+// Exactly one field should be set.
+type SeedStep struct {
+	SQL  string    `yaml:"sql,omitempty"`
+	Dump string    `yaml:"dump,omitempty"`
+	S3   *S3Config `yaml:"s3,omitempty"`
+	Run  string    `yaml:"run,omitempty"`
+}
+
+// S3Config defines an S3 dump source.
+type S3Config struct {
 	Bucket string `yaml:"bucket"`
-	Prefix string `yaml:"prefix"`
+	Key    string `yaml:"key"`
 	Region string `yaml:"region"`
 }
 
-// InfraServiceConfig defines a generic docker infrastructure service.
-type InfraServiceConfig struct {
-	Image string `yaml:"image"`
-	Port  int    `yaml:"port"`
+// InfrastructureConfig holds infrastructure configuration.
+type InfrastructureConfig struct {
+	ComposeFile string `yaml:"compose_file"`
 }
 
 // ServiceConfig defines an application service.
@@ -61,26 +74,30 @@ type ServiceConfig struct {
 	Path      string            `yaml:"path"`
 	Port      int               `yaml:"port"`
 	Command   string            `yaml:"command,omitempty"`
-	DependsOn []string          `yaml:"dependsOn,omitempty"`
+	DependsOn []string          `yaml:"depends_on,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
 }
 
 // LocalConfig holds local-mode specific configuration.
 type LocalConfig struct {
 	Worktree WorktreeConfig `yaml:"worktree"`
-	// ComposeFile is the path to the docker compose file for per-env infrastructure,
-	// relative to the project root. If empty, no per-env containers are started.
-	ComposeFile string `yaml:"composeFile,omitempty"`
 }
 
 // WorktreeConfig defines worktree settings.
 type WorktreeConfig struct {
-	BasePath string `yaml:"basePath"`
 	// SymlinkPatterns are glob patterns for gitignored files to symlink from the
 	// main worktree into each new worktree (e.g. ".env" matches .env files recursively).
 	// These are typically secret/config files that exist in the main repo but aren't
 	// tracked by git. Each pattern is matched recursively across the entire repo.
-	SymlinkPatterns []string `yaml:"symlinkPatterns,omitempty"`
+	SymlinkPatterns []string `yaml:"symlink_patterns,omitempty"`
+}
+
+// WorktreeBasePath returns the fixed base path for all previewctl worktrees.
+// Worktrees are always stored in ~/.previewctl/worktrees to avoid conflicts
+// with user-managed worktrees.
+func WorktreeBasePath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".previewctl", "worktrees")
 }
 
 // LoadConfig reads and parses a previewctl.yaml file.
@@ -123,32 +140,32 @@ func validateConfig(cfg *ProjectConfig) error {
 		if db.Engine == "" {
 			return fmt.Errorf("config validation: database '%s' requires 'engine'", name)
 		}
-		if db.Image == "" {
-			return fmt.Errorf("config validation: database '%s' requires 'image'", name)
+		if db.Local == nil {
+			return fmt.Errorf("config validation: database '%s' requires 'local' config", name)
 		}
-		if db.Port == 0 {
-			return fmt.Errorf("config validation: database '%s' requires 'port'", name)
+		if db.Local.Image == "" {
+			return fmt.Errorf("config validation: database '%s' requires 'local.image'", name)
 		}
-	}
-	for name, infra := range cfg.Infrastructure {
-		if infra.Image == "" {
-			return fmt.Errorf("config validation: infrastructure '%s' requires 'image'", name)
-		}
-		if infra.Port == 0 {
-			return fmt.Errorf("config validation: infrastructure '%s' requires 'port'", name)
+		if db.Local.Port == 0 {
+			return fmt.Errorf("config validation: database '%s' requires 'local.port'", name)
 		}
 	}
 	return nil
 }
 
-// AllBasePorts returns a map of all service and infrastructure names to their base ports.
+// AllBasePorts returns a map of all service, infrastructure, and database names to their base ports.
 func (c *ProjectConfig) AllBasePorts() map[string]int {
 	ports := make(map[string]int)
 	for name, svc := range c.Services {
 		ports[name] = svc.Port
 	}
-	for name, infra := range c.Infrastructure {
+	for name, infra := range c.InfraServices {
 		ports[name] = infra.Port
+	}
+	for name, db := range c.Core.Databases {
+		if db.Local != nil {
+			ports[name] = db.Local.Port
+		}
 	}
 	return ports
 }

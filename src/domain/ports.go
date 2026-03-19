@@ -9,9 +9,8 @@ type DatabasePort interface {
 	// EnsureInfrastructure ensures the database server is running and reachable.
 	EnsureInfrastructure(ctx context.Context) error
 
-	// SeedTemplate populates the template database from a snapshot or migration.
-	// snapshotPath is optional; adapters may use config defaults.
-	SeedTemplate(ctx context.Context, snapshotPath string) error
+	// SeedTemplate populates the template database from resolved seed materials.
+	SeedTemplate(ctx context.Context, materials []*SeedMaterial) error
 
 	// CreateDatabase creates an isolated database for the given environment.
 	CreateDatabase(ctx context.Context, envName string) (*DatabaseInfo, error)
@@ -102,6 +101,11 @@ type ProgressReporter interface {
 type NoopReporter struct{}
 
 func (NoopReporter) OnStep(StepEvent) {}
+
+// S3Downloader downloads objects from S3.
+type S3Downloader interface {
+	Download(ctx context.Context, bucket, key, destPath string) error
+}
 
 // ProvisionerPort manages VM lifecycle for preview/sandbox modes.
 // Not implemented in POC; exists to validate interface design.

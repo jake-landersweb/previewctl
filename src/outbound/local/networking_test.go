@@ -13,8 +13,8 @@ func TestNetworkingAdapter_AllocatePorts(t *testing.T) {
 			"backend": {Path: "apps/backend", Port: 8000},
 			"web":     {Path: "apps/web", Port: 3000},
 		},
-		Infrastructure: map[string]domain.InfraServiceConfig{
-			"redis": {Image: "redis:7-alpine", Port: 6379},
+		InfraServices: map[string]domain.InfraService{
+			"redis": {Name: "redis", Image: "redis:7-alpine", Port: 6379},
 		},
 	}
 

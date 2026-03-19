@@ -9,26 +9,29 @@ import (
 // Manager orchestrates environment lifecycle by coordinating all ports.
 // It is the single source of truth — all inbound adapters delegate to it.
 type Manager struct {
-	databases  map[string]DatabasePort
-	compute    ComputePort
-	networking NetworkingPort
-	envgen     EnvPort
-	state      StatePort
-	progress   ProgressReporter
-	hooks      *HookRunner
-	config     *ProjectConfig
+	databases    map[string]DatabasePort
+	compute      ComputePort
+	networking   NetworkingPort
+	envgen       EnvPort
+	state        StatePort
+	progress     ProgressReporter
+	hooks        *HookRunner
+	config       *ProjectConfig
+	seedResolver *SeedResolver
+	projectRoot  string
 }
 
 // ManagerDeps holds the dependencies for creating a Manager.
 type ManagerDeps struct {
-	Databases   map[string]DatabasePort
-	Compute     ComputePort
-	Networking  NetworkingPort
-	EnvGen      EnvPort
-	State       StatePort
-	Progress    ProgressReporter
-	Config      *ProjectConfig
-	ProjectRoot string
+	Databases    map[string]DatabasePort
+	Compute      ComputePort
+	Networking   NetworkingPort
+	EnvGen       EnvPort
+	State        StatePort
+	Progress     ProgressReporter
+	Config       *ProjectConfig
+	ProjectRoot  string
+	SeedResolver *SeedResolver
 }
 
 // NewManager creates a new Manager with the given dependencies.
@@ -38,14 +41,16 @@ func NewManager(deps ManagerDeps) *Manager {
 		progress = NoopReporter{}
 	}
 	return &Manager{
-		databases:  deps.Databases,
-		compute:    deps.Compute,
-		networking: deps.Networking,
-		envgen:     deps.EnvGen,
-		state:      deps.State,
-		progress:   progress,
-		hooks:      NewHookRunner(deps.Config.Hooks, progress),
-		config:     deps.Config,
+		databases:    deps.Databases,
+		compute:      deps.Compute,
+		networking:   deps.Networking,
+		envgen:       deps.EnvGen,
+		state:        deps.State,
+		progress:     progress,
+		hooks:        NewHookRunner(deps.Config.Hooks, progress),
+		config:       deps.Config,
+		seedResolver: deps.SeedResolver,
+		projectRoot:  deps.ProjectRoot,
 	}
 }
 
@@ -326,6 +331,11 @@ func (m *Manager) ResetDatabase(ctx context.Context, envName string, dbName stri
 		return fmt.Errorf("unknown database '%s'", dbName)
 	}
 
+	dbCfg, ok := m.config.Core.Databases[dbName]
+	if !ok {
+		return fmt.Errorf("no config for database '%s'", dbName)
+	}
+
 	hctx := &HookContext{
 		EnvName:     envName,
 		ProjectName: m.config.Name,
@@ -336,18 +346,36 @@ func (m *Manager) ResetDatabase(ctx context.Context, envName string, dbName stri
 		return err
 	}
 
-	if err := m.step(ctx, "reset_database",
-		fmt.Sprintf("Resetting %s database...", dbName),
-		msg(fmt.Sprintf("Database %s reset", dbName)),
+	// Step 1: Drop existing database
+	dropMsg := fmt.Sprintf("Dropped database (%s)", dbName)
+	if err := m.step(ctx, "drop_database",
+		fmt.Sprintf("Dropping database (%s)...", dbName),
+		&dropMsg,
 		hctx, func() error {
-			info, err := dbPort.ResetDatabase(ctx, envName)
+			return dbPort.DestroyDatabase(ctx, envName)
+		}); err != nil {
+		return fmt.Errorf("dropping database %s: %w", dbName, err)
+	}
+
+	// Step 2: Clone from template
+	templateDb := ""
+	if dbCfg.Local != nil {
+		templateDb = dbCfg.Local.TemplateDb
+	}
+	cloneMsg := fmt.Sprintf("Cloning (%s) from %s...", dbName, templateDb)
+	if err := m.step(ctx, "clone_database",
+		cloneMsg,
+		&cloneMsg,
+		hctx, func() error {
+			info, err := dbPort.CreateDatabase(ctx, envName)
 			if err != nil {
 				return err
 			}
 			hctx.Databases = map[string]*DatabaseInfo{dbName: info}
+			cloneMsg = fmt.Sprintf("Cloned (%s) %s → %s", dbName, templateDb, info.Database)
 			return nil
 		}); err != nil {
-		return fmt.Errorf("resetting database %s: %w", dbName, err)
+		return fmt.Errorf("cloning database %s: %w", dbName, err)
 	}
 
 	// Lifecycle-level after hook
@@ -359,10 +387,20 @@ func (m *Manager) ResetDatabase(ctx context.Context, envName string, dbName stri
 }
 
 // SeedTemplate seeds or refreshes a template database.
-func (m *Manager) SeedTemplate(ctx context.Context, dbName string, snapshotPath string) error {
+func (m *Manager) SeedTemplate(ctx context.Context, dbName string) error {
 	dbPort, ok := m.databases[dbName]
 	if !ok {
 		return fmt.Errorf("unknown database '%s'", dbName)
+	}
+
+	dbCfg, ok := m.config.Core.Databases[dbName]
+	if !ok {
+		return fmt.Errorf("no config for database '%s'", dbName)
+	}
+
+	modeCfg := dbCfg.Local
+	if modeCfg == nil {
+		return fmt.Errorf("database '%s' has no local config", dbName)
 	}
 
 	hctx := &HookContext{
@@ -375,15 +413,43 @@ func (m *Manager) SeedTemplate(ctx context.Context, dbName string, snapshotPath 
 		return err
 	}
 
-	if err := m.step(ctx, "ensure_infra", "Ensuring database infrastructure...", msg("Database infrastructure ready"), hctx, func() error {
-		return dbPort.EnsureInfrastructure(ctx)
-	}); err != nil {
+	connectMsg := fmt.Sprintf("Connected to %s:%d", dbCfg.Engine, modeCfg.Port)
+	if err := m.step(ctx, "ensure_infra",
+		fmt.Sprintf("Connecting to %s on port %d...", dbCfg.Engine, modeCfg.Port),
+		&connectMsg,
+		hctx, func() error {
+			return dbPort.EnsureInfrastructure(ctx)
+		}); err != nil {
 		return fmt.Errorf("ensuring infrastructure: %w", err)
 	}
 
-	if err := m.step(ctx, "seed_template", "Seeding template database...", msg("Template database seeded"), hctx, func() error {
-		return dbPort.SeedTemplate(ctx, snapshotPath)
-	}); err != nil {
+	// Resolve seed steps
+	var materials []*SeedMaterial
+	if len(modeCfg.Seed) > 0 && m.seedResolver != nil {
+		resolveMsg := fmt.Sprintf("Resolved %d seed step(s)", len(modeCfg.Seed))
+		if err := m.step(ctx, "resolve_seed",
+			fmt.Sprintf("Resolving %d seed step(s)...", len(modeCfg.Seed)),
+			&resolveMsg,
+			hctx, func() error {
+				var err error
+				materials, err = m.seedResolver.Resolve(ctx, modeCfg.Seed, m.projectRoot)
+				return err
+			}); err != nil {
+			return fmt.Errorf("resolving seed: %w", err)
+		}
+	}
+
+	seedSource := fmt.Sprintf("%d step(s)", len(modeCfg.Seed))
+	if len(modeCfg.Seed) == 0 {
+		seedSource = "empty template"
+	}
+	seedCompleteMsg := fmt.Sprintf("Seeded %s from %s", modeCfg.TemplateDb, seedSource)
+	if err := m.step(ctx, "seed_template",
+		fmt.Sprintf("Seeding %s from %s...", modeCfg.TemplateDb, seedSource),
+		&seedCompleteMsg,
+		hctx, func() error {
+			return dbPort.SeedTemplate(ctx, materials)
+		}); err != nil {
 		return fmt.Errorf("seeding template: %w", err)
 	}
 

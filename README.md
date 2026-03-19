@@ -61,34 +61,32 @@ Create a `previewctl.yaml` in your project root:
 ```yaml
 version: 1
 name: myproject
-packageManager: pnpm  # optional
+package_manager: pnpm  # optional
 
 core:
   databases:
     main:
       engine: postgres
-      image: postgres:16
-      port: 5432
-      user: postgres
-      password: postgres
-      templateDb: template_db
-      seed:
-        strategy: snapshot
-        snapshot:
-          source: local
-        script: schema/seed.sql
+      local:
+        provider: docker
+        image: postgres:16
+        port: 5432
+        user: postgres
+        password: postgres
+        template_db: template_db
+        seed:
+          - sql: schema/seed.sql
+          - run: npm run migrate
 
 infrastructure:
-  redis:
-    image: redis:7-alpine
-    port: 6379
+  compose_file: compose.worktree.yaml
 
 services:
   backend:
     path: apps/backend
     port: 8000
     command: pnpm dev
-    dependsOn: [redis]
+    depends_on: [redis]
     env:
       PORT: "{{ports.backend}}"
       DATABASE_URL: "{{databases.main}}"
@@ -96,21 +94,20 @@ services:
   web:
     path: apps/web
     port: 3000
-    dependsOn: [backend]
+    depends_on: [backend]
     env:
       NEXT_PUBLIC_API_URL: "http://localhost:{{ports.backend}}"
 
 local:
   worktree:
-    basePath: ~/worktrees
-    symlinkPatterns: [".env", ".env.*"]
-  composeFile: compose.worktree.yaml
+    symlink_patterns: [".env", ".env.*"]
+  compose_file: compose.worktree.yaml
 
 hooks:
   create:
     after:
       - run: npm run migrate
-        continueOnError: true
+        continue_on_error: true
 ```
 
 ### Template variables

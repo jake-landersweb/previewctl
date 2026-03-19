@@ -35,32 +35,20 @@ func TestParseConfig_Airgoods(t *testing.T) {
 	if db.Engine != "postgres" {
 		t.Errorf("expected engine 'postgres', got '%s'", db.Engine)
 	}
-	if db.Image != "pgvector/pgvector:pg15" {
-		t.Errorf("expected image 'pgvector/pgvector:pg15', got '%s'", db.Image)
+	if db.Local == nil {
+		t.Fatal("expected local config")
 	}
-	if db.Port != 5500 {
-		t.Errorf("expected port 5500, got %d", db.Port)
+	if db.Local.Image != "pgvector/pgvector:pg15" {
+		t.Errorf("expected image 'pgvector/pgvector:pg15', got '%s'", db.Local.Image)
 	}
-	if db.TemplateDb != "dev_template" {
-		t.Errorf("expected templateDb 'dev_template', got '%s'", db.TemplateDb)
+	if db.Local.Port != 5500 {
+		t.Errorf("expected port 5500, got %d", db.Local.Port)
 	}
-	if db.Seed == nil {
+	if db.Local.TemplateDb != "dev_template" {
+		t.Errorf("expected templateDb 'dev_template', got '%s'", db.Local.TemplateDb)
+	}
+	if len(db.Local.Seed) == 0 {
 		t.Fatal("expected seed config")
-	}
-	if db.Seed.Strategy != "snapshot" {
-		t.Errorf("expected seed strategy 'snapshot', got '%s'", db.Seed.Strategy)
-	}
-	if db.Seed.Snapshot.Bucket != "airgoods-bucket" {
-		t.Errorf("expected bucket 'airgoods-bucket', got '%s'", db.Seed.Snapshot.Bucket)
-	}
-
-	// Infrastructure
-	if len(cfg.Infrastructure) != 1 {
-		t.Fatalf("expected 1 infra service, got %d", len(cfg.Infrastructure))
-	}
-	redis := cfg.Infrastructure["redis"]
-	if redis.Image != "redis:7-alpine" {
-		t.Errorf("expected redis image 'redis:7-alpine', got '%s'", redis.Image)
 	}
 
 	// Services
@@ -91,10 +79,6 @@ func TestParseConfig_Airgoods(t *testing.T) {
 	if cfg.Local == nil {
 		t.Fatal("expected local config")
 	}
-	if cfg.Local.Worktree.BasePath != "~/worktrees/airgoods" {
-		t.Errorf("expected basePath '~/worktrees/airgoods', got '%s'", cfg.Local.Worktree.BasePath)
-	}
-
 	// Test port allocation produces valid results
 	basePorts := cfg.AllBasePorts()
 	if len(basePorts) != 13 { // 12 services + 1 infra

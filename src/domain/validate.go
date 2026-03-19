@@ -92,29 +92,28 @@ func validateRequired(v *ValidationError, cfg *ProjectConfig) {
 		if db.Engine == "" {
 			v.addf("database '%s': 'engine' is required", name)
 		}
-		if db.Image == "" {
-			v.addf("database '%s': 'image' is required", name)
+		if db.Local == nil {
+			v.addf("database '%s': 'local' config is required", name)
+			continue
 		}
-		if db.Port == 0 {
-			v.addf("database '%s': 'port' is required", name)
+		if db.Local.Image == "" {
+			v.addf("database '%s': 'local.image' is required", name)
 		}
-		if db.User == "" {
-			v.addf("database '%s': 'user' is required", name)
+		if db.Local.Port == 0 {
+			v.addf("database '%s': 'local.port' is required", name)
 		}
-		if db.Password == "" {
-			v.addf("database '%s': 'password' is required", name)
+		if db.Local.User == "" {
+			v.addf("database '%s': 'local.user' is required", name)
 		}
-		if db.TemplateDb == "" {
-			v.addf("database '%s': 'templateDb' is required", name)
+		if db.Local.Password == "" {
+			v.addf("database '%s': 'local.password' is required", name)
+		}
+		if db.Local.TemplateDb == "" {
+			v.addf("database '%s': 'local.template_db' is required", name)
 		}
 	}
-	for name, infra := range cfg.Infrastructure {
-		if infra.Image == "" {
-			v.addf("infrastructure '%s': 'image' is required", name)
-		}
-		if infra.Port == 0 {
-			v.addf("infrastructure '%s': 'port' is required", name)
-		}
+	if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile == "" {
+		v.add("infrastructure.compose_file is required when infrastructure is configured")
 	}
 }
 
@@ -125,11 +124,13 @@ func validatePortCollisions(v *ValidationError, cfg *ProjectConfig) {
 	for name, svc := range cfg.Services {
 		portOwners[svc.Port] = append(portOwners[svc.Port], fmt.Sprintf("service '%s'", name))
 	}
-	for name, infra := range cfg.Infrastructure {
+	for name, infra := range cfg.InfraServices {
 		portOwners[infra.Port] = append(portOwners[infra.Port], fmt.Sprintf("infrastructure '%s'", name))
 	}
 	for name, db := range cfg.Core.Databases {
-		portOwners[db.Port] = append(portOwners[db.Port], fmt.Sprintf("database '%s'", name))
+		if db.Local != nil {
+			portOwners[db.Local.Port] = append(portOwners[db.Local.Port], fmt.Sprintf("database '%s'", name))
+		}
 	}
 
 	for port, owners := range portOwners {
@@ -145,7 +146,7 @@ func validateDependencyRefs(v *ValidationError, cfg *ProjectConfig) {
 	for name := range cfg.Services {
 		known[name] = true
 	}
-	for name := range cfg.Infrastructure {
+	for name := range cfg.InfraServices {
 		known[name] = true
 	}
 	for name := range cfg.Core.Databases {
@@ -177,7 +178,7 @@ func validateTemplateVars(v *ValidationError, cfg *ProjectConfig) {
 	for name := range cfg.Services {
 		validPorts[name] = true
 	}
-	for name := range cfg.Infrastructure {
+	for name := range cfg.InfraServices {
 		validPorts[name] = true
 	}
 
@@ -188,7 +189,7 @@ func validateTemplateVars(v *ValidationError, cfg *ProjectConfig) {
 	}
 
 	validDbFields := map[string]bool{
-		"connectionString": true,
+		"connection_string": true,
 		"host":             true,
 		"port":             true,
 		"user":             true,
@@ -242,36 +243,38 @@ func validateEngines(v *ValidationError, cfg *ProjectConfig) {
 }
 
 func validateSeedConfig(v *ValidationError, cfg *ProjectConfig) {
-	validStrategies := map[string]bool{
-		"snapshot":   true,
-		"script":     true,
-		"migrations": true,
-	}
-
 	for name, db := range cfg.Core.Databases {
-		if db.Seed == nil {
+		if db.Local == nil || len(db.Local.Seed) == 0 {
 			continue
 		}
-		if db.Seed.Strategy == "" {
-			v.addf("database '%s': seed 'strategy' is required when seed is configured", name)
-		} else if !validStrategies[db.Seed.Strategy] {
-			v.addf("database '%s': unsupported seed strategy '%s' (supported: snapshot, script, migrations)", name, db.Seed.Strategy)
-		}
-
-		if db.Seed.Strategy == "snapshot" && db.Seed.Snapshot == nil {
-			v.addf("database '%s': seed strategy 'snapshot' requires 'snapshot' config", name)
-		}
-		if db.Seed.Strategy == "snapshot" && db.Seed.Snapshot != nil {
-			if db.Seed.Snapshot.Source == "" {
-				v.addf("database '%s': snapshot 'source' is required", name)
+		for i, step := range db.Local.Seed {
+			fieldsSet := 0
+			if step.SQL != "" {
+				fieldsSet++
 			}
-			if db.Seed.Snapshot.Bucket == "" {
-				v.addf("database '%s': snapshot 'bucket' is required", name)
+			if step.Dump != "" {
+				fieldsSet++
 			}
-		}
-
-		if db.Seed.Strategy == "script" && db.Seed.Script == "" {
-			v.addf("database '%s': seed strategy 'script' requires 'script' path", name)
+			if step.S3 != nil {
+				fieldsSet++
+			}
+			if step.Run != "" {
+				fieldsSet++
+			}
+			if fieldsSet == 0 {
+				v.addf("database '%s': seed[%d] must have exactly one field set (sql, dump, s3, or run)", name, i)
+			}
+			if fieldsSet > 1 {
+				v.addf("database '%s': seed[%d] must have exactly one field set, got %d", name, i, fieldsSet)
+			}
+			if step.S3 != nil {
+				if step.S3.Bucket == "" {
+					v.addf("database '%s': seed[%d].s3 'bucket' is required", name, i)
+				}
+				if step.S3.Key == "" {
+					v.addf("database '%s': seed[%d].s3 'key' is required", name, i)
+				}
+			}
 		}
 	}
 }
@@ -280,25 +283,20 @@ func validateLocalConfig(v *ValidationError, cfg *ProjectConfig) {
 	if cfg.Local == nil {
 		return
 	}
-	if cfg.Local.Worktree.BasePath == "" {
-		v.add("local.worktree.basePath is required when local config is present")
-	}
 	for _, pattern := range cfg.Local.Worktree.SymlinkPatterns {
 		if _, err := filepath.Match(pattern, "test"); err != nil {
-			v.addf("local.worktree.symlinkPatterns: invalid glob pattern '%s': %v", pattern, err)
+			v.addf("local.worktree.symlink_patterns: invalid glob pattern '%s': %v", pattern, err)
 		}
 	}
 }
 
 func validateFilePaths(v *ValidationError, cfg *ProjectConfig, projectRoot string, fileExists func(string) bool) {
-	// Compose file
-	if cfg.Local != nil && cfg.Local.ComposeFile != "" {
-		path := filepath.Join(projectRoot, cfg.Local.ComposeFile)
+	// Infrastructure compose file
+	if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile != "" {
+		path := filepath.Join(projectRoot, cfg.Infrastructure.ComposeFile)
 		if !fileExists(path) {
-			v.addf("local.composeFile: file not found: %s", path)
+			v.addf("infrastructure.compose_file: file not found: %s", path)
 		}
-	} else if len(cfg.Infrastructure) > 0 {
-		v.add("infrastructure services defined but 'local.composeFile' is not set")
 	}
 
 	// Service paths
@@ -309,15 +307,29 @@ func validateFilePaths(v *ValidationError, cfg *ProjectConfig, projectRoot strin
 		}
 	}
 
-	// Seed script paths
+	// Seed file paths (sql and dump steps)
 	for name, db := range cfg.Core.Databases {
-		if db.Seed != nil && db.Seed.Strategy == "script" && db.Seed.Script != "" {
-			path := db.Seed.Script
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(projectRoot, path)
+		if db.Local == nil {
+			continue
+		}
+		for i, step := range db.Local.Seed {
+			if step.SQL != "" {
+				path := step.SQL
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(projectRoot, path)
+				}
+				if !fileExists(path) {
+					v.addf("database '%s': seed[%d].sql file not found: %s", name, i, path)
+				}
 			}
-			if !fileExists(path) {
-				v.addf("database '%s': seed script not found: %s", name, path)
+			if step.Dump != "" {
+				path := step.Dump
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(projectRoot, path)
+				}
+				if !fileExists(path) {
+					v.addf("database '%s': seed[%d].dump file not found: %s", name, i, path)
+				}
 			}
 		}
 	}

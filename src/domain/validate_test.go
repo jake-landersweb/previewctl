@@ -11,16 +11,16 @@ func TestValidateConfig_Valid(t *testing.T) {
 		Name:    "myproject",
 		Core: CoreConfig{
 			Databases: map[string]DatabaseConfig{
-				"main": {Engine: "postgres", Image: "postgres:16", Port: 5500, User: "postgres", Password: "pass", TemplateDb: "dev_template"},
+				"main": {Engine: "postgres", Local: &DatabaseModeConfig{Image: "postgres:16", Port: 5500, User: "postgres", Password: "pass", TemplateDb: "dev_template"}},
 			},
 		},
-		Infrastructure: map[string]InfraServiceConfig{
-			"redis": {Image: "redis:7-alpine", Port: 6379},
+		InfraServices: map[string]InfraService{
+			"redis": {Name: "redis", Image: "redis:7-alpine", Port: 6379},
 		},
 		Services: map[string]ServiceConfig{
 			"backend": {Path: "apps/backend", Port: 8000, DependsOn: []string{"redis"}, Env: map[string]string{
 				"PORT":         "{{ports.backend}}",
-				"DATABASE_URL": "{{core.databases.main.connectionString}}",
+				"DATABASE_URL": "{{core.databases.main.connection_string}}",
 				"REDIS":        "redis://localhost:{{ports.redis}}",
 			}},
 			"web": {Path: "apps/web", Port: 3000, DependsOn: []string{"backend"}, Env: map[string]string{
@@ -57,8 +57,8 @@ func TestValidateConfig_PortCollisionAcrossTypes(t *testing.T) {
 	cfg := &ProjectConfig{
 		Version: 1,
 		Name:    "test",
-		Infrastructure: map[string]InfraServiceConfig{
-			"redis": {Image: "redis", Port: 8000},
+		InfraServices: map[string]InfraService{
+			"redis": {Name: "redis", Image: "redis", Port: 8000},
 		},
 		Services: map[string]ServiceConfig{
 			"backend": {Path: "apps/backend", Port: 8000},
@@ -150,7 +150,7 @@ func TestValidateConfig_InvalidTemplateVar(t *testing.T) {
 				Name:    "test",
 				Core: CoreConfig{
 					Databases: map[string]DatabaseConfig{
-						"main": {Engine: "postgres", Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t"},
+						"main": {Engine: "postgres", Local: &DatabaseModeConfig{Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t"}},
 					},
 				},
 				Services: map[string]ServiceConfig{
@@ -175,7 +175,7 @@ func TestValidateConfig_UnsupportedEngine(t *testing.T) {
 		Name:    "test",
 		Core: CoreConfig{
 			Databases: map[string]DatabaseConfig{
-				"main": {Engine: "mysql", Image: "mysql:8", Port: 3306, User: "root", Password: "pass", TemplateDb: "tmpl"},
+				"main": {Engine: "mysql", Local: &DatabaseModeConfig{Image: "mysql:8", Port: 3306, User: "root", Password: "pass", TemplateDb: "tmpl"}},
 			},
 		},
 		Services: map[string]ServiceConfig{
@@ -192,15 +192,15 @@ func TestValidateConfig_UnsupportedEngine(t *testing.T) {
 	}
 }
 
-func TestValidateConfig_SeedStrategyMismatch(t *testing.T) {
+func TestValidateConfig_SeedPipelineMultipleFields(t *testing.T) {
 	cfg := &ProjectConfig{
 		Version: 1,
 		Name:    "test",
 		Core: CoreConfig{
 			Databases: map[string]DatabaseConfig{
-				"main": {Engine: "postgres", Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t",
-					Seed: &SeedConfig{Strategy: "snapshot"},
-				},
+				"main": {Engine: "postgres", Local: &DatabaseModeConfig{Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t",
+					Seed: []SeedStep{{SQL: "schema.sql", Dump: "data.dump"}},
+				}},
 			},
 		},
 		Services: map[string]ServiceConfig{
@@ -210,9 +210,34 @@ func TestValidateConfig_SeedStrategyMismatch(t *testing.T) {
 
 	err := ValidateConfig(cfg)
 	if err == nil {
-		t.Fatal("expected error for snapshot without config")
+		t.Fatal("expected error for seed step with multiple fields")
 	}
-	if !strings.Contains(err.Error(), "requires 'snapshot' config") {
+	if !strings.Contains(err.Error(), "exactly one field set") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateConfig_SeedS3MissingBucket(t *testing.T) {
+	cfg := &ProjectConfig{
+		Version: 1,
+		Name:    "test",
+		Core: CoreConfig{
+			Databases: map[string]DatabaseConfig{
+				"main": {Engine: "postgres", Local: &DatabaseModeConfig{Image: "pg:16", Port: 5500, User: "u", Password: "p", TemplateDb: "t",
+					Seed: []SeedStep{{S3: &S3Config{Key: "dump.sql"}}},
+				}},
+			},
+		},
+		Services: map[string]ServiceConfig{
+			"svc": {Path: "svc", Port: 8000},
+		},
+	}
+
+	err := ValidateConfig(cfg)
+	if err == nil {
+		t.Fatal("expected error for S3 without bucket")
+	}
+	if !strings.Contains(err.Error(), "'bucket' is required") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -237,15 +262,15 @@ func TestValidateConfigWithFS_MissingPaths(t *testing.T) {
 	cfg := &ProjectConfig{
 		Version: 1,
 		Name:    "test",
-		Infrastructure: map[string]InfraServiceConfig{
-			"redis": {Image: "redis", Port: 6379},
+		InfraServices: map[string]InfraService{
+			"redis": {Name: "redis", Image: "redis", Port: 6379},
 		},
+		Infrastructure: &InfrastructureConfig{ComposeFile: "compose.worktree.yaml"},
 		Services: map[string]ServiceConfig{
 			"backend": {Path: "apps/backend", Port: 8000},
 		},
 		Local: &LocalConfig{
-			ComposeFile: "compose.worktree.yaml",
-			Worktree:    WorktreeConfig{BasePath: "~/worktrees"},
+			Worktree: WorktreeConfig{},
 		},
 	}
 
@@ -261,7 +286,7 @@ func TestValidateConfigWithFS_MissingPaths(t *testing.T) {
 	hasCompose := false
 	hasServicePath := false
 	for _, e := range ve.Errors {
-		if strings.Contains(e, "composeFile") {
+		if strings.Contains(e, "compose_file") {
 			hasCompose = true
 		}
 		if strings.Contains(e, "path not found") {
@@ -280,15 +305,15 @@ func TestValidateConfigWithFS_AllExists(t *testing.T) {
 	cfg := &ProjectConfig{
 		Version: 1,
 		Name:    "test",
-		Infrastructure: map[string]InfraServiceConfig{
-			"redis": {Image: "redis", Port: 6379},
+		InfraServices: map[string]InfraService{
+			"redis": {Name: "redis", Image: "redis", Port: 6379},
 		},
+		Infrastructure: &InfrastructureConfig{ComposeFile: "compose.worktree.yaml"},
 		Services: map[string]ServiceConfig{
 			"backend": {Path: "apps/backend", Port: 8000},
 		},
 		Local: &LocalConfig{
-			ComposeFile: "compose.worktree.yaml",
-			Worktree:    WorktreeConfig{BasePath: "~/worktrees"},
+			Worktree: WorktreeConfig{},
 		},
 	}
 

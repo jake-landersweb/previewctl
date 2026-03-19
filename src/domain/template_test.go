@@ -49,7 +49,7 @@ func TestRenderTemplate_MultiplePorts(t *testing.T) {
 func TestRenderTemplate_DatabaseConnectionString(t *testing.T) {
 	ctx := testContext()
 
-	result, err := RenderTemplate("{{core.databases.main.connectionString}}", ctx)
+	result, err := RenderTemplate("{{core.databases.main.connection_string}}", ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestRenderEnvMap(t *testing.T) {
 
 	envMap := map[string]string{
 		"PORT":         "{{ports.backend}}",
-		"DATABASE_URL": "{{core.databases.main.connectionString}}",
+		"DATABASE_URL": "{{core.databases.main.connection_string}}",
 		"STATIC":       "no-template-here",
 	}
 

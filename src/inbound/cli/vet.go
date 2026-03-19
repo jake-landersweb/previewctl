@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/jake-landersweb/previewctl/src/domain"
 	"github.com/spf13/cobra"
@@ -40,7 +41,7 @@ func newVetCmd() *cobra.Command {
 
 			// Print summary of what was validated
 			dbCount := len(cfg.Core.Databases)
-			infraCount := len(cfg.Infrastructure)
+			infraCount := len(cfg.InfraServices)
 			svcCount := len(cfg.Services)
 
 			KeyValue("Version", fmt.Sprintf("%d", cfg.Version))
@@ -48,8 +49,8 @@ func newVetCmd() *cobra.Command {
 			KeyValue("Infrastructure", fmt.Sprintf("%d", infraCount))
 			KeyValue("Databases", fmt.Sprintf("%d", dbCount))
 
-			if cfg.Local != nil && cfg.Local.ComposeFile != "" {
-				KeyValue("Compose file", cfg.Local.ComposeFile)
+			if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile != "" {
+				KeyValue("Compose file", cfg.Infrastructure.ComposeFile)
 			}
 
 			// Count total env vars and template refs
@@ -58,6 +59,19 @@ func newVetCmd() *cobra.Command {
 				envVarCount += len(svc.Env)
 			}
 			KeyValue("Env vars", fmt.Sprintf("%d across %d services", envVarCount, svcCount))
+
+			// Check Docker
+			dockerStatus := "running"
+			if err := exec.Command("docker", "info").Run(); err != nil {
+				dockerStatus = "not running"
+			}
+			KeyValue("Docker", dockerStatus)
+			if dockerStatus == "not running" {
+				fmt.Fprintf(os.Stderr, "  %s %s\n",
+					styleSkipped.Render("⚠"),
+					styleSkipped.Render("Docker daemon is not running — previewctl requires Docker for infrastructure"),
+				)
+			}
 
 			// Show base port range
 			ports := cfg.AllBasePorts()

@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+// noopS3Downloader is a test stub for S3Downloader.
+type noopS3Downloader struct{}
+
+func (noopS3Downloader) Download(_ context.Context, _, _, _ string) error {
+	return fmt.Errorf("s3 not configured")
+}
+
 // mockTracker records the order of operations across all mocks.
 type mockTracker struct {
 	calls []string
@@ -26,7 +33,7 @@ func (m *mockDatabasePort) EnsureInfrastructure(_ context.Context) error {
 	return nil
 }
 
-func (m *mockDatabasePort) SeedTemplate(_ context.Context, path string) error {
+func (m *mockDatabasePort) SeedTemplate(_ context.Context, materials []*SeedMaterial) error {
 	m.tracker.record(fmt.Sprintf("db.%s.SeedTemplate", m.name))
 	return nil
 }
@@ -198,7 +205,24 @@ func newTestManager(tracker *mockTracker) (*Manager, *mockStatePort, *mockProgre
 		EnvGen:     &mockEnvPort{tracker: tracker},
 		State:      statePort,
 		Progress:   progress,
-		Config:     &ProjectConfig{Name: "myproject"},
+		SeedResolver: NewSeedResolver(noopS3Downloader{}),
+		Config: &ProjectConfig{
+			Name: "myproject",
+			Core: CoreConfig{
+				Databases: map[string]DatabaseConfig{
+					"main": {
+						Engine: "postgres",
+						Local: &DatabaseModeConfig{
+							Image:      "postgres:16",
+							Port:       5500,
+							User:       "postgres",
+							Password:   "postgres",
+							TemplateDb: "dev_template",
+						},
+					},
+				},
+			},
+		},
 	})
 
 	return mgr, statePort, progress
@@ -385,7 +409,7 @@ func TestManager_SeedTemplate(t *testing.T) {
 	mgr, _, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	err := mgr.SeedTemplate(ctx, "main", "/path/to/snapshot")
+	err := mgr.SeedTemplate(ctx, "main")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -416,8 +440,17 @@ func TestManager_ResetDatabase(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(tracker.calls) != 1 || tracker.calls[0] != "db.main.ResetDatabase" {
-		t.Errorf("expected [db.main.ResetDatabase], got %v", tracker.calls)
+	expectedCalls := []string{
+		"db.main.DestroyDatabase",
+		"db.main.CreateDatabase",
+	}
+	if len(tracker.calls) != len(expectedCalls) {
+		t.Fatalf("expected %d calls, got %d: %v", len(expectedCalls), len(tracker.calls), tracker.calls)
+	}
+	for i, expected := range expectedCalls {
+		if tracker.calls[i] != expected {
+			t.Errorf("call %d: expected '%s', got '%s'", i, expected, tracker.calls[i])
+		}
 	}
 }
 

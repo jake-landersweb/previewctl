@@ -21,20 +21,10 @@ type ComputeAdapter struct {
 
 // NewComputeAdapter creates a new local compute adapter.
 func NewComputeAdapter(config *domain.ProjectConfig, composeFile string) *ComputeAdapter {
-	base := "~/worktrees"
-	if config.Local != nil && config.Local.Worktree.BasePath != "" {
-		base = config.Local.Worktree.BasePath
-	}
-	// Expand ~ to home directory
-	if strings.HasPrefix(base, "~/") {
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, base[2:])
-	}
-
 	return &ComputeAdapter{
 		config:       config,
 		composeFile:  composeFile,
-		worktreeBase: base,
+		worktreeBase: domain.WorktreeBasePath(),
 	}
 }
 

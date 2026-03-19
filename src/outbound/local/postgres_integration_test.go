@@ -18,8 +18,7 @@ import (
 
 func newTestPostgresAdapter(t *testing.T, pg *testutil.PostgresContainer) *PostgresAdapter {
 	t.Helper()
-	return NewPostgresAdapterWithHost("main", domain.DatabaseConfig{
-		Engine:     "postgres",
+	return NewPostgresAdapterWithHost("main", domain.DatabaseModeConfig{
 		Image:      "postgres:16",
 		Port:       pg.Port,
 		User:       testutil.TestDBUser,
@@ -55,8 +54,8 @@ func TestPostgresAdapter_SeedTemplate_Empty(t *testing.T) {
 
 	adapter := newTestPostgresAdapter(t, pg)
 
-	// Seed with no snapshot — should create an empty template db
-	if err := adapter.SeedTemplate(ctx, ""); err != nil {
+	// Seed with no materials — should create an empty template db
+	if err := adapter.SeedTemplate(ctx, []*domain.SeedMaterial{}); err != nil {
 		t.Fatalf("SeedTemplate failed: %v", err)
 	}
 
@@ -86,21 +85,19 @@ func TestPostgresAdapter_SeedTemplate_WithSeedScript(t *testing.T) {
 INSERT INTO users (name) VALUES ('alice'), ('bob');`
 	os.WriteFile(seedFile, []byte(seedSQL), 0o644)
 
-	adapter := NewPostgresAdapterWithHost("main", domain.DatabaseConfig{
-		Engine:     "postgres",
+	adapter := NewPostgresAdapterWithHost("main", domain.DatabaseModeConfig{
 		Image:      "postgres:16",
 		Port:       pg.Port,
 		User:       testutil.TestDBUser,
 		Password:   testutil.TestDBPassword,
 		TemplateDb: "dev_template",
-		Seed: &domain.SeedConfig{
-			Strategy: "script",
-			Script:   seedFile,
-		},
 	}, pg.Host)
 
-	if err := adapter.SeedTemplate(ctx, ""); err != nil {
-		t.Fatalf("SeedTemplate with script failed: %v", err)
+	materials := []*domain.SeedMaterial{
+		{Kind: domain.SeedSQL, SQLPath: seedFile},
+	}
+	if err := adapter.SeedTemplate(ctx, materials); err != nil {
+		t.Fatalf("SeedTemplate with sql material failed: %v", err)
 	}
 
 	// Verify seed data exists in the template
@@ -134,21 +131,19 @@ func TestPostgresAdapter_CreateDatabase_FromTemplate(t *testing.T) {
 INSERT INTO items (title) VALUES ('item1'), ('item2'), ('item3');`
 	os.WriteFile(seedFile, []byte(seedSQL), 0o644)
 
-	adapter := NewPostgresAdapterWithHost("main", domain.DatabaseConfig{
-		Engine:     "postgres",
+	adapter := NewPostgresAdapterWithHost("main", domain.DatabaseModeConfig{
 		Image:      "postgres:16",
 		Port:       pg.Port,
 		User:       testutil.TestDBUser,
 		Password:   testutil.TestDBPassword,
 		TemplateDb: "dev_template",
-		Seed: &domain.SeedConfig{
-			Strategy: "script",
-			Script:   seedFile,
-		},
 	}, pg.Host)
 
 	// Seed template first
-	if err := adapter.SeedTemplate(ctx, ""); err != nil {
+	materials := []*domain.SeedMaterial{
+		{Kind: domain.SeedSQL, SQLPath: seedFile},
+	}
+	if err := adapter.SeedTemplate(ctx, materials); err != nil {
 		t.Fatalf("SeedTemplate failed: %v", err)
 	}
 
@@ -184,7 +179,7 @@ func TestPostgresAdapter_DatabaseExists(t *testing.T) {
 	adapter := newTestPostgresAdapter(t, pg)
 
 	// Seed template
-	if err := adapter.SeedTemplate(ctx, ""); err != nil {
+	if err := adapter.SeedTemplate(ctx, []*domain.SeedMaterial{}); err != nil {
 		t.Fatalf("SeedTemplate failed: %v", err)
 	}
 
@@ -218,7 +213,7 @@ func TestPostgresAdapter_DestroyDatabase(t *testing.T) {
 	adapter := newTestPostgresAdapter(t, pg)
 
 	// Seed + create
-	adapter.SeedTemplate(ctx, "")
+	adapter.SeedTemplate(ctx, []*domain.SeedMaterial{})
 	adapter.CreateDatabase(ctx, "destroy-test")
 
 	// Destroy
@@ -242,17 +237,18 @@ func TestPostgresAdapter_ResetDatabase(t *testing.T) {
 	seedFile := filepath.Join(seedDir, "seed.sql")
 	os.WriteFile(seedFile, []byte("CREATE TABLE counters (n INT); INSERT INTO counters VALUES (1);"), 0o644)
 
-	adapter := NewPostgresAdapterWithHost("main", domain.DatabaseConfig{
-		Engine:     "postgres",
+	adapter := NewPostgresAdapterWithHost("main", domain.DatabaseModeConfig{
 		Image:      "postgres:16",
 		Port:       pg.Port,
 		User:       testutil.TestDBUser,
 		Password:   testutil.TestDBPassword,
 		TemplateDb: "dev_template",
-		Seed:       &domain.SeedConfig{Strategy: "script", Script: seedFile},
 	}, pg.Host)
 
-	adapter.SeedTemplate(ctx, "")
+	materials := []*domain.SeedMaterial{
+		{Kind: domain.SeedSQL, SQLPath: seedFile},
+	}
+	adapter.SeedTemplate(ctx, materials)
 	adapter.CreateDatabase(ctx, "reset-test")
 
 	// Mutate the cloned database
@@ -285,7 +281,7 @@ func TestPostgresAdapter_MultipleEnvironments(t *testing.T) {
 	pg := testutil.StartPostgres(ctx, t)
 	adapter := newTestPostgresAdapter(t, pg)
 
-	adapter.SeedTemplate(ctx, "")
+	adapter.SeedTemplate(ctx, []*domain.SeedMaterial{})
 
 	// Create multiple environments
 	envs := []string{"env-alpha", "env-beta", "env-gamma"}
@@ -329,10 +325,10 @@ func TestPostgresAdapter_SeedTemplate_Idempotent(t *testing.T) {
 	adapter := newTestPostgresAdapter(t, pg)
 
 	// Seed twice — second call should re-seed cleanly
-	if err := adapter.SeedTemplate(ctx, ""); err != nil {
+	if err := adapter.SeedTemplate(ctx, []*domain.SeedMaterial{}); err != nil {
 		t.Fatalf("first SeedTemplate failed: %v", err)
 	}
-	if err := adapter.SeedTemplate(ctx, ""); err != nil {
+	if err := adapter.SeedTemplate(ctx, []*domain.SeedMaterial{}); err != nil {
 		t.Fatalf("second SeedTemplate failed: %v", err)
 	}
 

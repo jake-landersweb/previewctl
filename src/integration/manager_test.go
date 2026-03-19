@@ -85,15 +85,16 @@ func setupManager(t *testing.T, pg *testutil.PostgresContainer) (*domain.Manager
 		Core: domain.CoreConfig{
 			Databases: map[string]domain.DatabaseConfig{
 				"main": {
-					Engine:     "postgres",
-					Image:      "postgres:16",
-					Port:       pg.Port,
-					User:       testutil.TestDBUser,
-					Password:   testutil.TestDBPassword,
-					TemplateDb: "dev_template",
-					Seed: &domain.SeedConfig{
-						Strategy: "script",
-						Script:   seedFile,
+					Engine: "postgres",
+					Local: &domain.DatabaseModeConfig{
+						Image:      "postgres:16",
+						Port:       pg.Port,
+						User:       testutil.TestDBUser,
+						Password:   testutil.TestDBPassword,
+						TemplateDb: "dev_template",
+						Seed: []domain.SeedStep{
+							{SQL: seedFile},
+						},
 					},
 				},
 			},
@@ -102,14 +103,14 @@ func setupManager(t *testing.T, pg *testutil.PostgresContainer) (*domain.Manager
 			"backend": {Path: "apps/backend", Port: 8000},
 			"web":     {Path: "apps/web", Port: 3000},
 		},
-		Infrastructure: map[string]domain.InfraServiceConfig{
-			"redis": {Image: "redis:7-alpine", Port: 6379},
+		InfraServices: map[string]domain.InfraService{
+			"redis": {Name: "redis", Image: "redis:7-alpine", Port: 6379},
 		},
 	}
 
 	mgr := domain.NewManager(domain.ManagerDeps{
 		Databases: map[string]domain.DatabasePort{
-			"main": local.NewPostgresAdapterWithHost("main", config.Core.Databases["main"], pg.Host),
+			"main": local.NewPostgresAdapterWithHost("main", *config.Core.Databases["main"].Local, pg.Host),
 		},
 		Compute:    &stubComputePort{baseDir: worktreeDir},
 		Networking: local.NewNetworkingAdapter(config),
@@ -138,7 +139,7 @@ func TestIntegration_FullLifecycle(t *testing.T) {
 	mgr, worktreeDir := setupManager(t, pg)
 
 	// 1. Seed the template database
-	if err := mgr.SeedTemplate(ctx, "main", ""); err != nil {
+	if err := mgr.SeedTemplate(ctx, "main"); err != nil {
 		t.Fatalf("SeedTemplate failed: %v", err)
 	}
 
@@ -241,7 +242,7 @@ func TestIntegration_MultipleEnvironments(t *testing.T) {
 	pg := testutil.StartPostgres(ctx, t)
 	mgr, _ := setupManager(t, pg)
 
-	mgr.SeedTemplate(ctx, "main", "")
+	mgr.SeedTemplate(ctx, "main")
 
 	envNames := []string{"env-one", "env-two", "env-three"}
 	for _, name := range envNames {
@@ -294,7 +295,7 @@ func TestIntegration_ResetDatabase(t *testing.T) {
 	pg := testutil.StartPostgres(ctx, t)
 	mgr, _ := setupManager(t, pg)
 
-	mgr.SeedTemplate(ctx, "main", "")
+	mgr.SeedTemplate(ctx, "main")
 	mgr.Init(ctx, "reset-env", "reset-env")
 
 	// Insert extra data
@@ -330,7 +331,7 @@ func TestIntegration_ReseedTemplate(t *testing.T) {
 	pg := testutil.StartPostgres(ctx, t)
 	mgr, _ := setupManager(t, pg)
 
-	mgr.SeedTemplate(ctx, "main", "")
+	mgr.SeedTemplate(ctx, "main")
 	mgr.Init(ctx, "before-reseed", "before-reseed")
 
 	db := connectDB(t, pg, "wt_before_reseed")
@@ -342,7 +343,7 @@ func TestIntegration_ReseedTemplate(t *testing.T) {
 	}
 
 	// Reseed (idempotent)
-	if err := mgr.SeedTemplate(ctx, "main", ""); err != nil {
+	if err := mgr.SeedTemplate(ctx, "main"); err != nil {
 		t.Fatalf("reseed failed: %v", err)
 	}
 
@@ -372,7 +373,7 @@ func TestIntegration_StatusWithSnapshotInfo(t *testing.T) {
 	pg := testutil.StartPostgres(ctx, t)
 	mgr, _ := setupManager(t, pg)
 
-	mgr.SeedTemplate(ctx, "main", "")
+	mgr.SeedTemplate(ctx, "main")
 	mgr.Init(ctx, "status-test", "status-test")
 
 	detail, err := mgr.Status(ctx, "status-test")

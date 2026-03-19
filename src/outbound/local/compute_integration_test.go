@@ -63,8 +63,8 @@ func TestComputeAdapter_StartCreatesContainers(t *testing.T) {
 
 	config := &domain.ProjectConfig{
 		Name: "previewctl-test",
-		Infrastructure: map[string]domain.InfraServiceConfig{
-			"redis": {Image: "redis:7-alpine", Port: 6379},
+		InfraServices: map[string]domain.InfraService{
+			"redis": {Name: "redis", Image: "redis:7-alpine", Port: 6379},
 		},
 	}
 
@@ -97,7 +97,7 @@ func TestComputeAdapter_DestroyRemovesContainers(t *testing.T) {
 
 	config := &domain.ProjectConfig{
 		Name:  projectName,
-		Local: &domain.LocalConfig{Worktree: domain.WorktreeConfig{BasePath: tmpDir}},
+		Local: &domain.LocalConfig{},
 	}
 
 	adapter := &ComputeAdapter{
