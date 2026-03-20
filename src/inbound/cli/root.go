@@ -32,6 +32,7 @@ func Execute() {
 
 	rootCmd.AddCommand(
 		newCreateCmd(),
+		newAttachCmd(),
 		newDeleteCmd(),
 		newListCmd(),
 		newStatusCmd(),

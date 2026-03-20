@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -177,6 +178,7 @@ func (m *Manager) Init(ctx context.Context, envName string, branch string) (*Env
 		Local: &LocalMeta{
 			WorktreePath:       resources.WorktreePath,
 			ComposeProjectName: fmt.Sprintf("%s-%s", m.config.Name, envName),
+			ManagedWorktree:    true,
 		},
 	}
 
@@ -192,6 +194,123 @@ func (m *Manager) Init(ctx context.Context, envName string, branch string) (*Env
 	}
 
 	return entry, nil
+}
+
+// Attach creates a preview environment using an existing worktree.
+// It runs everything except worktree creation: ports, core services, env files, infra.
+func (m *Manager) Attach(ctx context.Context, envName string, worktreePath string) (*EnvironmentEntry, error) {
+	// Detect branch from the worktree
+	branch := detectBranch(worktreePath)
+
+	hctx := &HookContext{
+		EnvName:      envName,
+		Branch:       branch,
+		ProjectName:  m.config.Name,
+		WorktreePath: worktreePath,
+	}
+
+	if err := m.hooks.RunBefore(ctx, "create", hctx); err != nil {
+		return nil, err
+	}
+
+	// 1. Allocate ports
+	var ports PortMap
+	if err := m.step(ctx, "allocate_ports", "Allocating ports...", msg("Ports allocated"), hctx, func() error {
+		var err error
+		ports, err = m.networking.AllocatePorts(envName)
+		if err != nil {
+			return err
+		}
+		hctx.Ports = ports
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("allocating ports: %w", err)
+	}
+
+	// 2. Run core service "seed" hooks
+	coreOutputs := make(map[string]map[string]string)
+	for svcName, svc := range m.config.Core.Services {
+		if svc.Hooks == nil || svc.Hooks.Seed == "" {
+			continue
+		}
+		seedMsg := fmt.Sprintf("Seeded core service %s", svcName)
+		if err := m.step(ctx, fmt.Sprintf("seed_core_%s", svcName),
+			fmt.Sprintf("Running seed hook for %s...", svcName),
+			&seedMsg,
+			hctx, func() error {
+				m.progress.OnStep(StepEvent{Step: fmt.Sprintf("seed_core_%s", svcName), Status: StepStreaming})
+				outputs, err := m.runCoreHook(ctx, svcName, "seed", envName, ports)
+				if err != nil {
+					return err
+				}
+				coreOutputs[svcName] = outputs
+				hctx.CoreOutputs = coreOutputs
+				return nil
+			}); err != nil {
+			return nil, fmt.Errorf("seeding core service %s: %w", svcName, err)
+		}
+	}
+
+	// 3. Symlink shared env files
+	if err := m.step(ctx, "symlink_env", "Symlinking shared env files...", msg("Shared env files symlinked"), hctx, func() error {
+		return m.envgen.SymlinkSharedEnvFiles(ctx, worktreePath)
+	}); err != nil {
+		return nil, fmt.Errorf("symlinking env files: %w", err)
+	}
+
+	// 4. Generate env files
+	if err := m.step(ctx, "generate_env", "Generating .env.local files...", msg(".env.local files generated"), hctx, func() error {
+		return m.envgen.Generate(ctx, envName, worktreePath, ports, coreOutputs)
+	}); err != nil {
+		return nil, fmt.Errorf("generating env files: %w", err)
+	}
+
+	// 5. Start per-env infrastructure
+	if err := m.step(ctx, "start_infra", "Starting infrastructure containers...", msg("Infrastructure containers started"), hctx, func() error {
+		return m.compute.Start(ctx, envName, ports)
+	}); err != nil {
+		return nil, fmt.Errorf("starting infrastructure: %w", err)
+	}
+
+	// 6. Persist state
+	now := time.Now()
+	entry := &EnvironmentEntry{
+		Name:        envName,
+		Mode:        ModeLocal,
+		Branch:      branch,
+		Status:      StatusRunning,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Ports:       ports,
+		CoreOutputs: coreOutputs,
+		Local: &LocalMeta{
+			WorktreePath:       worktreePath,
+			ComposeProjectName: fmt.Sprintf("%s-%s", m.config.Name, envName),
+			ManagedWorktree:    false,
+		},
+	}
+
+	if err := m.step(ctx, "save_state", "Saving state...", msg("State saved"), hctx, func() error {
+		return m.state.SetEnvironment(ctx, envName, entry)
+	}); err != nil {
+		return nil, fmt.Errorf("saving state: %w", err)
+	}
+
+	if err := m.hooks.RunAfter(ctx, "create", hctx); err != nil {
+		return nil, err
+	}
+
+	return entry, nil
+}
+
+// detectBranch tries to determine the git branch of a worktree path.
+func detectBranch(worktreePath string) string {
+	cmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // Destroy tears down an environment and cleans up all resources.
@@ -245,10 +364,19 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 		}
 	}
 
-	if err := m.step(ctx, "destroy_compute", "Removing worktree and stopping containers...", msg("Worktree and containers removed"), hctx, func() error {
-		return m.compute.Destroy(ctx, envName)
-	}); err != nil {
-		return fmt.Errorf("destroying compute resources: %w", err)
+	if entry.Local != nil && entry.Local.ManagedWorktree {
+		if err := m.step(ctx, "destroy_compute", "Removing worktree and stopping containers...", msg("Worktree and containers removed"), hctx, func() error {
+			return m.compute.Destroy(ctx, envName)
+		}); err != nil {
+			return fmt.Errorf("destroying compute resources: %w", err)
+		}
+	} else {
+		// Attached worktree — only stop containers, don't remove the worktree
+		if err := m.step(ctx, "stop_infra", "Stopping infrastructure containers...", msg("Infrastructure containers stopped"), hctx, func() error {
+			return m.compute.Stop(ctx, envName)
+		}); err != nil {
+			return fmt.Errorf("stopping infrastructure: %w", err)
+		}
 	}
 
 	if entry.Local != nil && entry.Local.WorktreePath != "" {

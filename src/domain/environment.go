@@ -35,6 +35,7 @@ type ComputeResources struct {
 type LocalMeta struct {
 	WorktreePath       string `json:"worktreePath"`
 	ComposeProjectName string `json:"composeProjectName"`
+	ManagedWorktree    bool   `json:"managedWorktree"` // true = created by previewctl, false = attached
 }
 
 // RemoteMeta holds remote-mode specific metadata (future).

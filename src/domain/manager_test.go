@@ -205,6 +205,7 @@ func TestManager_Destroy_CallOrder(t *testing.T) {
 		Local: &LocalMeta{
 			WorktreePath:       "/worktrees/feat-auth",
 			ComposeProjectName: "myproject-feat-auth",
+			ManagedWorktree:    true,
 		},
 	}
 
@@ -450,6 +451,7 @@ func TestManager_Destroy_WithCoreServices(t *testing.T) {
 		Local: &LocalMeta{
 			WorktreePath:       "/tmp/worktrees/feat-db",
 			ComposeProjectName: "myproject-feat-db",
+			ManagedWorktree:    true,
 		},
 		CoreOutputs: map[string]map[string]string{
 			"postgres": {"CONNECTION_STRING": "test"},
