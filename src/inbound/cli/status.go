@@ -41,8 +41,8 @@ func newStatusCmd() *cobra.Command {
 			KeyValue("Mode", string(e.Mode))
 			KeyValue("Status", StatusBadge(string(e.Status)))
 
-			if e.Local != nil {
-				KeyValue("Worktree", e.Local.WorktreePath)
+			if wt := e.WorktreePath(); wt != "" {
+				KeyValue("Worktree", wt)
 			}
 
 			infraStatus := "stopped"

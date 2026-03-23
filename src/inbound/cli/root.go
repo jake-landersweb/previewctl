@@ -68,7 +68,6 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 	mgr := domain.NewManager(domain.ManagerDeps{
 		Compute:     local.NewComputeAdapter(cfg, composeFile),
 		Networking:  local.NewNetworkingAdapter(cfg),
-		EnvGen:      local.NewEnvGenAdapter(cfg),
 		State:       filestate.NewFileStateAdapter(statePath),
 		Progress:    progress,
 		Config:      cfg,

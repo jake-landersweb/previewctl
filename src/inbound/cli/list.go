@@ -48,10 +48,7 @@ func newListCmd() *cobra.Command {
 
 			fmt.Println()
 			for i, e := range entries {
-				path := ""
-				if e.Local != nil {
-					path = e.Local.WorktreePath
-				}
+				path := e.WorktreePath()
 
 				fmt.Fprintf(os.Stderr, "  %s  %s  %s\n",
 					nameStyle.Render(e.Name),

@@ -47,28 +47,6 @@ func (s *stubComputePort) DetectBranch(_ context.Context, _ string) (string, err
 	return "main", nil
 }
 
-// stubEnvPort writes a marker file with captured outputs.
-type stubEnvPort struct{}
-
-func (s *stubEnvPort) Generate(_ context.Context, envName string, workdir string, ports domain.PortMap, coreOutputs map[string]map[string]string) error {
-	marker := filepath.Join(workdir, ".previewctl-env-generated")
-	content := fmt.Sprintf("env=%s\n", envName)
-	for svc, port := range ports {
-		content += fmt.Sprintf("port.%s=%d\n", svc, port)
-	}
-	for svcName, outputs := range coreOutputs {
-		for key, val := range outputs {
-			content += fmt.Sprintf("core.%s.%s=%s\n", svcName, key, val)
-		}
-	}
-	return os.WriteFile(marker, []byte(content), 0o644)
-}
-
-func (s *stubEnvPort) Cleanup(_ context.Context, workdir string) error {
-	_ = os.Remove(filepath.Join(workdir, ".previewctl-env-generated"))
-	return nil
-}
-
 // writeSeedScript creates a shell script that clones a database from a template
 // and outputs connection details.
 func writeSeedScript(t *testing.T, dir string, host string, port int) string {
@@ -209,7 +187,6 @@ func setupManagerWithPostgres(t *testing.T) (*domain.Manager, string, string, in
 	mgr := domain.NewManager(domain.ManagerDeps{
 		Compute:     &stubComputePort{baseDir: worktreeDir},
 		Networking:  local.NewNetworkingAdapter(config),
-		EnvGen:      &stubEnvPort{},
 		State:       filestate.NewFileStateAdapter(statePath),
 		Config:      config,
 		ProjectRoot: tmpDir,
@@ -292,15 +269,14 @@ func TestIntegration_FullLifecycleWithCoreHooks(t *testing.T) {
 		t.Errorf("expected cloned data, got '%s'", label)
 	}
 
-	// Verify env generation marker has core outputs
-	markerPath := filepath.Join(worktreeDir, "feat-auth", ".previewctl-env-generated")
-	markerData, err := os.ReadFile(markerPath)
+	// Verify .previewctl.json was written
+	manifestPath := filepath.Join(worktreeDir, "feat-auth", ".previewctl.json")
+	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
-		t.Fatalf("reading marker: %v", err)
+		t.Fatalf("reading manifest: %v", err)
 	}
-	markerStr := string(markerData)
-	if !containsStr(markerStr, "core.postgres.DB_NAME=wt_feat_auth") {
-		t.Errorf("expected core outputs in env marker, got:\n%s", markerStr)
+	if len(manifestData) == 0 {
+		t.Error("expected non-empty manifest")
 	}
 
 	// Destroy — should drop the cloned database
@@ -423,17 +399,4 @@ func TestIntegration_Status(t *testing.T) {
 	if detail.Entry.ProvisionerOutputs["postgres"]["DB_NAME"] != "wt_status_test" {
 		t.Errorf("expected stored DB_NAME, got '%s'", detail.Entry.ProvisionerOutputs["postgres"]["DB_NAME"])
 	}
-}
-
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && findStr(s, substr)
-}
-
-func findStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

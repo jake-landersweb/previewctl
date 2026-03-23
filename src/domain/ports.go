@@ -39,15 +39,6 @@ type NetworkingPort interface {
 	GetServiceURL(envName string, service string) (string, error)
 }
 
-// EnvPort generates environment configuration files (.env.local, etc).
-type EnvPort interface {
-	// Generate writes .env.local files for all services in the environment.
-	Generate(ctx context.Context, envName string, workdir string, ports PortMap, provisionerOutputs map[string]map[string]string) error
-
-	// Cleanup removes generated env files.
-	Cleanup(ctx context.Context, workdir string) error
-}
-
 // StatePort persists previewctl state.
 // File-based for POC; interface accommodates Postgres/etcd later.
 type StatePort interface {

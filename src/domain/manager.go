@@ -1,9 +1,13 @@
 package domain
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -13,7 +17,6 @@ import (
 type Manager struct {
 	compute     ComputePort
 	networking  NetworkingPort
-	envgen      EnvPort
 	state       StatePort
 	progress    ProgressReporter
 	config      *ProjectConfig
@@ -24,7 +27,6 @@ type Manager struct {
 type ManagerDeps struct {
 	Compute     ComputePort
 	Networking  NetworkingPort
-	EnvGen      EnvPort
 	State       StatePort
 	Progress    ProgressReporter
 	Config      *ProjectConfig
@@ -40,7 +42,6 @@ func NewManager(deps ManagerDeps) *Manager {
 	return &Manager{
 		compute:     deps.Compute,
 		networking:  deps.Networking,
-		envgen:      deps.EnvGen,
 		state:       deps.State,
 		progress:    progress,
 		config:      deps.Config,
@@ -50,7 +51,7 @@ func NewManager(deps ManagerDeps) *Manager {
 
 // step executes a lifecycle step with progress reporting.
 // completeMsg is a pointer so the closure can update it dynamically.
-func (m *Manager) step(ctx context.Context, name string, startMsg string, completeMsg *string, fn func() error) error {
+func (m *Manager) step(_ context.Context, name string, startMsg string, completeMsg *string, fn func() error) error {
 	m.progress.OnStep(StepEvent{Step: name, Status: StepStarted, Message: startMsg})
 	if err := fn(); err != nil {
 		m.progress.OnStep(StepEvent{Step: name, Status: StepFailed, Error: err})
@@ -65,34 +66,14 @@ func msg(s string) *string { return &s }
 
 // Init creates a new environment end-to-end: creates a worktree, then provisions it.
 func (m *Manager) Init(ctx context.Context, envName string, branch string) (*EnvironmentEntry, error) {
-	// Run provisioner.before hook if defined
-	if m.config.Provisioner.Before != "" {
-		beforeMsg := fmt.Sprintf("Ran provisioner.before (%s)", m.config.Provisioner.Before)
-		if err := m.step(ctx, "provisioner_before",
-			fmt.Sprintf("Running provisioner.before → %s", m.config.Provisioner.Before),
-			&beforeMsg,
-			func() error {
-				m.progress.OnStep(StepEvent{Step: "provisioner_before", Status: StepStreaming})
-				env := m.buildHookEnv(envName, "", nil)
-				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot)
-				return err
-			}); err != nil {
-			return nil, fmt.Errorf("provisioner before hook: %w", err)
-		}
+	// PROVISIONER PHASE
+	ca, manifest, err := m.runProvisioner(ctx, envName, branch, "", true)
+	if err != nil {
+		return nil, err
 	}
 
-	// Create compute resources (worktree)
-	var resources *ComputeResources
-	if err := m.step(ctx, "create_compute", "Creating compute resources...", msg("Compute resources created"), func() error {
-		var err error
-		resources, err = m.compute.Create(ctx, envName, branch)
-		return err
-	}); err != nil {
-		return nil, fmt.Errorf("creating compute resources: %w", err)
-	}
-
-	// Provision using the shared path
-	return m.provision(ctx, envName, branch, resources.WorktreePath, true)
+	// RUNNER PHASE
+	return m.runRunner(ctx, envName, branch, ca, manifest, true)
 }
 
 // Attach creates a preview environment using an existing worktree.
@@ -113,7 +94,26 @@ func (m *Manager) Attach(ctx context.Context, envName string, worktreePath strin
 		return nil, fmt.Errorf("environment '%s' already exists — use 'delete' first or choose a different name", envName)
 	}
 
-	// Run provisioner.before hook if defined
+	// PROVISIONER PHASE (skip worktree creation, use existing path)
+	ca, manifest, err := m.runProvisioner(ctx, envName, branch, worktreePath, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// RUNNER PHASE
+	return m.runRunner(ctx, envName, branch, ca, manifest, false)
+}
+
+// runProvisioner executes the provisioner phase:
+// 1. provisioner.before hook
+// 2. Create compute (worktree for local, hook for remote) — or use existing
+// 3. Construct ComputeAccess
+// 4. Allocate ports
+// 5. Run provisioner service seed hooks
+// 6. Build manifest
+// 7. Write .previewctl.json via ComputeAccess
+func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingWorktree string, createWorktree bool) (ComputeAccess, *Manifest, error) {
+	// 1. Run provisioner.before hook if defined
 	if m.config.Provisioner.Before != "" {
 		beforeMsg := fmt.Sprintf("Ran provisioner.before (%s)", m.config.Provisioner.Before)
 		if err := m.step(ctx, "provisioner_before",
@@ -121,31 +121,44 @@ func (m *Manager) Attach(ctx context.Context, envName string, worktreePath strin
 			&beforeMsg,
 			func() error {
 				m.progress.OnStep(StepEvent{Step: "provisioner_before", Status: StepStreaming})
-				env := m.buildHookEnv(envName, worktreePath, nil)
+				env := m.buildHookEnv(envName, existingWorktree, nil)
 				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot)
 				return err
 			}); err != nil {
-			return nil, fmt.Errorf("provisioner before hook: %w", err)
+			return nil, nil, fmt.Errorf("provisioner before hook: %w", err)
 		}
 	}
 
-	return m.provision(ctx, envName, branch, worktreePath, false)
-}
+	// 2. Create or reuse compute resources
+	var worktreePath string
+	if existingWorktree != "" {
+		worktreePath = existingWorktree
+	} else if createWorktree {
+		var resources *ComputeResources
+		if err := m.step(ctx, "create_compute", "Creating compute resources...", msg("Compute resources created"), func() error {
+			var err error
+			resources, err = m.compute.Create(ctx, envName, branch)
+			return err
+		}); err != nil {
+			return nil, nil, fmt.Errorf("creating compute resources: %w", err)
+		}
+		worktreePath = resources.WorktreePath
+	}
 
-// provision runs the shared environment setup steps: ports, core services,
-// env files, infra, and state persistence.
-func (m *Manager) provision(ctx context.Context, envName, branch, worktreePath string, managedWorktree bool) (*EnvironmentEntry, error) {
-	// 1. Allocate ports
+	// 3. Construct ComputeAccess
+	ca := NewDomainLocalComputeAccess(worktreePath)
+
+	// 4. Allocate ports
 	var ports PortMap
 	if err := m.step(ctx, "allocate_ports", "Allocating ports...", msg("Ports allocated"), func() error {
 		var err error
 		ports, err = m.networking.AllocatePorts(envName)
 		return err
 	}); err != nil {
-		return nil, fmt.Errorf("allocating ports: %w", err)
+		return nil, nil, fmt.Errorf("allocating ports: %w", err)
 	}
 
-	// 2. Run provisioner service "seed" hooks
+	// 5. Run provisioner service "seed" hooks
 	provisionerOutputs := make(map[string]map[string]string)
 	for svcName, svc := range m.config.Provisioner.Services {
 		if svc.Seed == "" {
@@ -164,49 +177,36 @@ func (m *Manager) provision(ctx context.Context, envName, branch, worktreePath s
 				provisionerOutputs[svcName] = outputs
 				return nil
 			}); err != nil {
-			return nil, fmt.Errorf("seeding %s: %w", svcName, err)
+			return nil, nil, fmt.Errorf("seeding %s: %w", svcName, err)
 		}
 	}
 
-	// 3. Generate env files
-	if err := m.step(ctx, "generate_env", "Generating .env.local files...", msg(".env.local files generated"), func() error {
-		return m.envgen.Generate(ctx, envName, worktreePath, ports, provisionerOutputs)
+	// 6. Build manifest
+	mode := m.config.Mode
+	if mode == "" {
+		mode = "local"
+	}
+	var manifest *Manifest
+	if err := m.step(ctx, "build_manifest", "Building manifest...", msg("Manifest built"), func() error {
+		var err error
+		manifest, err = BuildManifest(m.config, envName, branch, mode, ports, provisionerOutputs)
+		return err
 	}); err != nil {
-		return nil, fmt.Errorf("generating env files: %w", err)
+		return nil, nil, fmt.Errorf("building manifest: %w", err)
 	}
 
-	// 4. Start per-env infrastructure
-	if err := m.step(ctx, "start_infra", "Starting infrastructure containers...", msg("Infrastructure containers started"), func() error {
-		return m.compute.Start(ctx, envName, ports)
+	// 7. Write .previewctl.json via ComputeAccess
+	if err := m.step(ctx, "write_manifest", "Writing manifest...", msg("Manifest written to .previewctl.json"), func() error {
+		data, err := json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return err
+		}
+		return ca.WriteFile(ctx, ".previewctl.json", data, 0o644)
 	}); err != nil {
-		return nil, fmt.Errorf("starting infrastructure: %w", err)
+		return nil, nil, fmt.Errorf("writing manifest: %w", err)
 	}
 
-	// 5. Persist state
-	now := time.Now()
-	entry := &EnvironmentEntry{
-		Name:        envName,
-		Mode:        ModeLocal,
-		Branch:      branch,
-		Status:      StatusRunning,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Ports:       ports,
-		ProvisionerOutputs: provisionerOutputs,
-		Local: &LocalMeta{
-			WorktreePath:       worktreePath,
-			ComposeProjectName: fmt.Sprintf("%s-%s", m.config.Name, envName),
-			ManagedWorktree:    managedWorktree,
-		},
-	}
-
-	if err := m.step(ctx, "save_state", "Saving state...", msg("State saved"), func() error {
-		return m.state.SetEnvironment(ctx, envName, entry)
-	}); err != nil {
-		return nil, fmt.Errorf("saving state: %w", err)
-	}
-
-	// Run provisioner.after hook if defined (runs in the worktree)
+	// 8. Run provisioner.after hook if defined (runs on orchestrator, not via ComputeAccess)
 	if m.config.Provisioner.After != "" {
 		afterMsg := fmt.Sprintf("Ran provisioner.after (%s)", m.config.Provisioner.After)
 		if err := m.step(ctx, "provisioner_after",
@@ -214,12 +214,118 @@ func (m *Manager) provision(ctx context.Context, envName, branch, worktreePath s
 			&afterMsg,
 			func() error {
 				m.progress.OnStep(StepEvent{Step: "provisioner_after", Status: StepStreaming})
-				env := m.buildHookEnv(envName, worktreePath, ports)
-				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.After, nil, env, worktreePath)
+				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
+				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.After, nil, env, m.projectRoot)
 				return err
 			}); err != nil {
-			return nil, fmt.Errorf("provisioner after hook: %w", err)
+			return nil, nil, fmt.Errorf("provisioner after hook: %w", err)
 		}
+	}
+
+	return ca, manifest, nil
+}
+
+// runRunner executes the runner phase:
+// 1. runner.before via ComputeAccess.Exec
+// 2. Generate .env files via ComputeAccess.WriteFile
+// 3. Start infrastructure via compute port
+// 4. runner.deploy via ComputeAccess.Exec
+// 5. runner.after via ComputeAccess.Exec
+// 6. Save state
+func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca ComputeAccess, manifest *Manifest, managedWorktree bool) (*EnvironmentEntry, error) {
+	// 1. runner.before hook
+	if m.config.Runner != nil && m.config.Runner.Before != "" {
+		beforeMsg := fmt.Sprintf("Ran runner.before (%s)", m.config.Runner.Before)
+		if err := m.step(ctx, "runner_before",
+			fmt.Sprintf("Running runner.before → %s", m.config.Runner.Before),
+			&beforeMsg,
+			func() error {
+				m.progress.OnStep(StepEvent{Step: "runner_before", Status: StepStreaming})
+				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
+				_, err := ca.Exec(ctx, m.config.Runner.Before, env)
+				return err
+			}); err != nil {
+			return nil, fmt.Errorf("runner before hook: %w", err)
+		}
+	}
+
+	// 2. Generate .env files from manifest
+	envFiles := manifest.EnvFilePaths()
+	if len(envFiles) > 0 {
+		if err := m.step(ctx, "generate_env", "Generating .env files...", msg(".env files generated"), func() error {
+			for relPath, envVars := range envFiles {
+				content := RenderEnvFileContent(envVars)
+				if err := ca.WriteFile(ctx, relPath, content, 0o644); err != nil {
+					return fmt.Errorf("writing %s: %w", relPath, err)
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, fmt.Errorf("generating env files: %w", err)
+		}
+	}
+
+	// 3. Start per-env infrastructure
+	if err := m.step(ctx, "start_infra", "Starting infrastructure containers...", msg("Infrastructure containers started"), func() error {
+		return m.compute.Start(ctx, envName, manifest.Ports)
+	}); err != nil {
+		return nil, fmt.Errorf("starting infrastructure: %w", err)
+	}
+
+	// 4. runner.deploy hook (typically skipped for local)
+	if m.config.Runner != nil && m.config.Runner.Deploy != "" {
+		deployMsg := fmt.Sprintf("Ran runner.deploy (%s)", m.config.Runner.Deploy)
+		if err := m.step(ctx, "runner_deploy",
+			fmt.Sprintf("Running runner.deploy → %s", m.config.Runner.Deploy),
+			&deployMsg,
+			func() error {
+				m.progress.OnStep(StepEvent{Step: "runner_deploy", Status: StepStreaming})
+				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
+				_, err := ca.Exec(ctx, m.config.Runner.Deploy, env)
+				return err
+			}); err != nil {
+			return nil, fmt.Errorf("runner deploy hook: %w", err)
+		}
+	}
+
+	// 5. runner.after hook
+	if m.config.Runner != nil && m.config.Runner.After != "" {
+		afterMsg := fmt.Sprintf("Ran runner.after (%s)", m.config.Runner.After)
+		if err := m.step(ctx, "runner_after",
+			fmt.Sprintf("Running runner.after → %s", m.config.Runner.After),
+			&afterMsg,
+			func() error {
+				m.progress.OnStep(StepEvent{Step: "runner_after", Status: StepStreaming})
+				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
+				_, err := ca.Exec(ctx, m.config.Runner.After, env)
+				return err
+			}); err != nil {
+			return nil, fmt.Errorf("runner after hook: %w", err)
+		}
+	}
+
+	// 6. Persist state
+	now := time.Now()
+	entry := &EnvironmentEntry{
+		Name:               envName,
+		Mode:               ModeLocal,
+		Branch:             branch,
+		Status:             StatusRunning,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		Ports:              manifest.Ports,
+		ProvisionerOutputs: manifest.ProvisionerOutputs,
+		Compute: &ComputeAccessInfo{
+			Type:            "local",
+			Path:            ca.Root(),
+			ManagedWorktree: managedWorktree,
+		},
+	}
+
+	if err := m.step(ctx, "save_state", "Saving state...", msg("State saved"), func() error {
+		return m.state.SetEnvironment(ctx, envName, entry)
+	}); err != nil {
+		return nil, fmt.Errorf("saving state: %w", err)
 	}
 
 	return entry, nil
@@ -241,7 +347,29 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 	}
 	m.progress.OnStep(StepEvent{Step: "load_state", Status: StepCompleted, Message: "Environment state loaded"})
 
-	// Run provisioner service "destroy" hooks before removing the worktree
+	// Reconstruct ComputeAccess from state
+	var ca ComputeAccess
+	if entry.Compute != nil && entry.Compute.Path != "" {
+		ca = NewDomainLocalComputeAccess(entry.Compute.Path)
+	}
+
+	// Run runner.destroy hook if defined
+	if m.config.Runner != nil && m.config.Runner.Destroy != "" && ca != nil {
+		destroyMsg := fmt.Sprintf("Ran runner.destroy (%s)", m.config.Runner.Destroy)
+		if err := m.step(ctx, "runner_destroy",
+			fmt.Sprintf("Running runner.destroy → %s", m.config.Runner.Destroy),
+			&destroyMsg,
+			func() error {
+				m.progress.OnStep(StepEvent{Step: "runner_destroy", Status: StepStreaming})
+				env := m.buildHookEnv(envName, ca.Root(), entry.Ports)
+				_, err := ca.Exec(ctx, m.config.Runner.Destroy, env)
+				return err
+			}); err != nil {
+			return fmt.Errorf("runner destroy hook: %w", err)
+		}
+	}
+
+	// Run provisioner service "destroy" hooks (on orchestrator, not via ComputeAccess)
 	for svcName, svc := range m.config.Provisioner.Services {
 		if svc.Destroy == "" {
 			continue
@@ -259,7 +387,8 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 		}
 	}
 
-	if entry.Local != nil && entry.Local.ManagedWorktree {
+	// Destroy or stop compute
+	if entry.IsManagedWorktree() {
 		if err := m.step(ctx, "destroy_compute", "Removing worktree and stopping containers...", msg("Worktree and containers removed"), func() error {
 			return m.compute.Destroy(ctx, envName)
 		}); err != nil {
@@ -274,9 +403,14 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 		}
 	}
 
-	if entry.Local != nil && entry.Local.WorktreePath != "" {
+	// Clean up .env files via os.Remove (simple cleanup, no ComputeAccess needed for local)
+	if entry.Compute != nil && entry.Compute.Path != "" {
 		if err := m.step(ctx, "cleanup_env", "Cleaning up env files...", msg("Env files cleaned up"), func() error {
-			return m.envgen.Cleanup(ctx, entry.Local.WorktreePath)
+			for _, svc := range m.config.Services {
+				envFilePath := filepath.Join(entry.Compute.Path, svc.Path, svc.ResolvedEnvFile())
+				_ = os.Remove(envFilePath) // ignore errors for missing files
+			}
+			return nil
 		}); err != nil {
 			return fmt.Errorf("cleaning up env files: %w", err)
 		}
@@ -385,7 +519,7 @@ func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName stri
 	return ExecuteCoreHook(ctx, hookScript, requiredOutputs, env, m.projectRoot)
 }
 
-// buildHookEnv constructs environment variables for provisioner hooks.
+// buildHookEnv constructs environment variables for hooks.
 func (m *Manager) buildHookEnv(envName, worktreePath string, ports PortMap) []string {
 	env := append(os.Environ(),
 		fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
@@ -469,4 +603,50 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 	}
 
 	return nil
+}
+
+// DomainLocalComputeAccess is a minimal ComputeAccess implementation for use within
+// the domain layer. It avoids importing the outbound/local package.
+type DomainLocalComputeAccess struct {
+	root string
+}
+
+// NewDomainLocalComputeAccess creates a local ComputeAccess from a filesystem path.
+func NewDomainLocalComputeAccess(root string) ComputeAccess {
+	return &DomainLocalComputeAccess{root: root}
+}
+
+func (l *DomainLocalComputeAccess) WriteFile(_ context.Context, relPath string, data []byte, mode os.FileMode) error {
+	absPath := filepath.Join(l.root, relPath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		return err
+	}
+	if data == nil {
+		_ = os.Remove(absPath)
+		return nil
+	}
+	return os.WriteFile(absPath, data, mode)
+}
+
+func (l *DomainLocalComputeAccess) ReadFile(_ context.Context, relPath string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(l.root, relPath))
+}
+
+func (l *DomainLocalComputeAccess) Exec(ctx context.Context, command string, env []string) (string, error) {
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = l.root
+	cmd.Env = env
+	cmd.Stderr = os.Stderr
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("exec in %s: %w", l.root, err)
+	}
+	return stdout.String(), nil
+}
+
+func (l *DomainLocalComputeAccess) Root() string {
+	return l.root
 }

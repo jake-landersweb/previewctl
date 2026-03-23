@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jake-landersweb/previewctl/src/domain"
 	filestate "github.com/jake-landersweb/previewctl/src/outbound/state"
 	"github.com/spf13/cobra"
 )
@@ -61,14 +62,11 @@ Resources are shown for review before any deletion occurs.`,
 					continue
 				}
 				for _, entry := range state.Environments {
-					if entry.Local != nil {
-						if entry.Local.WorktreePath != "" {
-							trackedWorktrees[entry.Local.WorktreePath] = true
-						}
-						if entry.Local.ComposeProjectName != "" {
-							trackedComposeProjects[entry.Local.ComposeProjectName] = true
-						}
+					if wt := entry.WorktreePath(); wt != "" {
+						trackedWorktrees[wt] = true
 					}
+					composeName := domain.ComposeProjectName(proj, entry.Name)
+					trackedComposeProjects[composeName] = true
 				}
 			}
 			spinner.Stop()

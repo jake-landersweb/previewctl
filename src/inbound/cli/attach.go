@@ -75,7 +75,7 @@ The worktree itself is not managed by previewctl and will not be removed on dele
 				styleDetail.Render(entry.Name)))
 
 			KeyValue("Branch", entry.Branch)
-			KeyValue("Worktree", entry.Local.WorktreePath)
+			KeyValue("Worktree", entry.WorktreePath())
 			KeyValue("Managed", "false (external worktree)")
 
 			SectionHeader("Ports")

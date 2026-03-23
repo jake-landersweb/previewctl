@@ -15,10 +15,11 @@ func ResolveEnvironmentFromCwd(cwd string, environments map[string]*EnvironmentE
 	}
 
 	for name, entry := range environments {
-		if entry.Local == nil || entry.Local.WorktreePath == "" {
+		wtPath := entry.WorktreePath()
+		if wtPath == "" {
 			continue
 		}
-		absWorktree, err := filepath.Abs(entry.Local.WorktreePath)
+		absWorktree, err := filepath.Abs(wtPath)
 		if err != nil {
 			continue
 		}

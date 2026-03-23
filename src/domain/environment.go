@@ -31,31 +31,45 @@ type ComputeResources struct {
 	ExternalIP   string `json:"externalIp,omitempty"`   // preview/sandbox mode
 }
 
-// LocalMeta holds local-mode specific metadata.
-type LocalMeta struct {
-	WorktreePath       string `json:"worktreePath"`
-	ComposeProjectName string `json:"composeProjectName"`
-	ManagedWorktree    bool   `json:"managedWorktree"` // true = created by previewctl, false = attached
+// ComputeAccessInfo stores how to reach the compute location so environments
+// can be reconnected across CLI invocations.
+type ComputeAccessInfo struct {
+	Type            string `json:"type"`                      // "local" or "ssh"
+	Path            string `json:"path,omitempty"`            // local worktree path
+	Host            string `json:"host,omitempty"`            // VM IP (ssh)
+	User            string `json:"user,omitempty"`            // SSH user
+	ManagedWorktree bool   `json:"managedWorktree,omitempty"` // true = created by previewctl
 }
 
-// RemoteMeta holds remote-mode specific metadata (future).
-type RemoteMeta struct {
-	VMId       string `json:"vmId"`
-	ExternalIP string `json:"externalIp"`
+// ComposeProjectName returns the compose project name for this environment.
+func ComposeProjectName(projectName, envName string) string {
+	return projectName + "-" + envName
 }
 
 // EnvironmentEntry is a tracked environment persisted in state.
 type EnvironmentEntry struct {
-	Name        string                       `json:"name"`
-	Mode        EnvironmentMode              `json:"mode"`
-	Branch      string                       `json:"branch"`
-	Status      EnvironmentStatus            `json:"status"`
-	CreatedAt   time.Time                    `json:"createdAt"`
-	UpdatedAt   time.Time                    `json:"updatedAt"`
-	Ports       PortMap                      `json:"ports"`
+	Name               string                       `json:"name"`
+	Mode               EnvironmentMode              `json:"mode"`
+	Branch             string                       `json:"branch"`
+	Status             EnvironmentStatus            `json:"status"`
+	CreatedAt          time.Time                    `json:"createdAt"`
+	UpdatedAt          time.Time                    `json:"updatedAt"`
+	Ports              PortMap                      `json:"ports"`
 	ProvisionerOutputs map[string]map[string]string `json:"provisionerOutputs"`
-	Local       *LocalMeta                   `json:"local,omitempty"`
-	Remote      *RemoteMeta                  `json:"remote,omitempty"`
+	Compute            *ComputeAccessInfo           `json:"compute,omitempty"`
+}
+
+// WorktreePath returns the worktree path from ComputeAccessInfo, or empty string.
+func (e *EnvironmentEntry) WorktreePath() string {
+	if e.Compute != nil {
+		return e.Compute.Path
+	}
+	return ""
+}
+
+// IsManagedWorktree returns whether the worktree was created by previewctl.
+func (e *EnvironmentEntry) IsManagedWorktree() bool {
+	return e.Compute != nil && e.Compute.ManagedWorktree
 }
 
 // EnvironmentDetail is an enriched view with live infrastructure checks.
