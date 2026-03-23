@@ -423,7 +423,7 @@ func TestManager_CoreReset(t *testing.T) {
 	statePort.environments["feat-auth"] = &EnvironmentEntry{
 		Name:  "feat-auth",
 		Ports: PortMap{"backend": 61000},
-		CoreOutputs: map[string]map[string]string{
+		ProvisionerOutputs: map[string]map[string]string{
 			"postgres": {"CONNECTION_STRING": "old", "DB_HOST": "old"},
 		},
 	}
@@ -435,8 +435,8 @@ func TestManager_CoreReset(t *testing.T) {
 
 	// Verify outputs were updated in state
 	entry := statePort.environments["feat-auth"]
-	if entry.CoreOutputs["postgres"]["DB_HOST"] != "localhost" {
-		t.Errorf("expected updated DB_HOST, got '%s'", entry.CoreOutputs["postgres"]["DB_HOST"])
+	if entry.ProvisionerOutputs["postgres"]["DB_HOST"] != "localhost" {
+		t.Errorf("expected updated DB_HOST, got '%s'", entry.ProvisionerOutputs["postgres"]["DB_HOST"])
 	}
 }
 
@@ -462,10 +462,10 @@ func TestManager_Init_WithCoreServices(t *testing.T) {
 	}
 
 	// Verify core outputs were captured and stored
-	if entry.CoreOutputs == nil {
-		t.Fatal("expected CoreOutputs to be populated")
+	if entry.ProvisionerOutputs == nil {
+		t.Fatal("expected ProvisionerOutputs to be populated")
 	}
-	pgOutputs, ok := entry.CoreOutputs["postgres"]
+	pgOutputs, ok := entry.ProvisionerOutputs["postgres"]
 	if !ok {
 		t.Fatal("expected postgres outputs")
 	}
@@ -490,7 +490,7 @@ func TestManager_Destroy_WithCoreServices(t *testing.T) {
 			ComposeProjectName: "myproject-feat-db",
 			ManagedWorktree:    true,
 		},
-		CoreOutputs: map[string]map[string]string{
+		ProvisionerOutputs: map[string]map[string]string{
 			"postgres": {"CONNECTION_STRING": "test"},
 		},
 	}

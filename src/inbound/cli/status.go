@@ -51,11 +51,11 @@ func newStatusCmd() *cobra.Command {
 			}
 			KeyValue("Infrastructure", StatusBadge(infraStatus))
 
-			// Display core outputs if any
-			if len(e.CoreOutputs) > 0 {
+			// Display provisioner outputs if any
+			if len(e.ProvisionerOutputs) > 0 {
 				fmt.Fprintln(os.Stderr)
-				SectionHeader("Core Outputs")
-				for svcName, outputs := range e.CoreOutputs {
+				SectionHeader("Provisioner Outputs")
+				for svcName, outputs := range e.ProvisionerOutputs {
 					for key, val := range outputs {
 						DetailKeyValue(fmt.Sprintf("%s.%s", svcName, key), val)
 					}

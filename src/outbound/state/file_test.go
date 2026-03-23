@@ -45,7 +45,7 @@ func TestFileStateAdapter_RoundTrip(t *testing.T) {
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		Ports:       domain.PortMap{"backend": 8042, "web": 3042},
-		CoreOutputs: make(map[string]map[string]string),
+		ProvisionerOutputs: make(map[string]map[string]string),
 		Local: &domain.LocalMeta{
 			WorktreePath:       "/Users/jake/worktrees/myproject/feat-auth",
 			ComposeProjectName: "myproject-feat-auth",

@@ -261,10 +261,10 @@ func TestIntegration_FullLifecycleWithCoreHooks(t *testing.T) {
 	}
 
 	// Verify core outputs were captured
-	if entry.CoreOutputs == nil {
-		t.Fatal("expected CoreOutputs to be populated")
+	if entry.ProvisionerOutputs == nil {
+		t.Fatal("expected ProvisionerOutputs to be populated")
 	}
-	pgOutputs := entry.CoreOutputs["postgres"]
+	pgOutputs := entry.ProvisionerOutputs["postgres"]
 	if pgOutputs == nil {
 		t.Fatal("expected postgres outputs")
 	}
@@ -420,8 +420,8 @@ func TestIntegration_Status(t *testing.T) {
 	if detail.Entry.Name != "status-test" {
 		t.Errorf("expected name 'status-test', got '%s'", detail.Entry.Name)
 	}
-	if detail.Entry.CoreOutputs["postgres"]["DB_NAME"] != "wt_status_test" {
-		t.Errorf("expected stored DB_NAME, got '%s'", detail.Entry.CoreOutputs["postgres"]["DB_NAME"])
+	if detail.Entry.ProvisionerOutputs["postgres"]["DB_NAME"] != "wt_status_test" {
+		t.Errorf("expected stored DB_NAME, got '%s'", detail.Entry.ProvisionerOutputs["postgres"]["DB_NAME"])
 	}
 }
 

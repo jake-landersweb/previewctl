@@ -67,12 +67,16 @@ func msg(s string) *string { return &s }
 func (m *Manager) Init(ctx context.Context, envName string, branch string) (*EnvironmentEntry, error) {
 	// Run provisioner.before hook if defined
 	if m.config.Provisioner.Before != "" {
-		env := append(os.Environ(),
-			fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
-			fmt.Sprintf("PREVIEWCTL_PROJECT_NAME=%s", m.config.Name),
-			fmt.Sprintf("PREVIEWCTL_PROJECT_ROOT=%s", m.projectRoot),
-		)
-		if _, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot); err != nil {
+		beforeMsg := fmt.Sprintf("Ran provisioner.before (%s)", m.config.Provisioner.Before)
+		if err := m.step(ctx, "provisioner_before",
+			fmt.Sprintf("Running provisioner.before → %s", m.config.Provisioner.Before),
+			&beforeMsg,
+			func() error {
+				m.progress.OnStep(StepEvent{Step: "provisioner_before", Status: StepStreaming})
+				env := m.buildHookEnv(envName, "", nil)
+				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot)
+				return err
+			}); err != nil {
 			return nil, fmt.Errorf("provisioner before hook: %w", err)
 		}
 	}
@@ -111,12 +115,16 @@ func (m *Manager) Attach(ctx context.Context, envName string, worktreePath strin
 
 	// Run provisioner.before hook if defined
 	if m.config.Provisioner.Before != "" {
-		env := append(os.Environ(),
-			fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
-			fmt.Sprintf("PREVIEWCTL_PROJECT_NAME=%s", m.config.Name),
-			fmt.Sprintf("PREVIEWCTL_PROJECT_ROOT=%s", m.projectRoot),
-		)
-		if _, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot); err != nil {
+		beforeMsg := fmt.Sprintf("Ran provisioner.before (%s)", m.config.Provisioner.Before)
+		if err := m.step(ctx, "provisioner_before",
+			fmt.Sprintf("Running provisioner.before → %s", m.config.Provisioner.Before),
+			&beforeMsg,
+			func() error {
+				m.progress.OnStep(StepEvent{Step: "provisioner_before", Status: StepStreaming})
+				env := m.buildHookEnv(envName, worktreePath, nil)
+				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot)
+				return err
+			}); err != nil {
 			return nil, fmt.Errorf("provisioner before hook: %w", err)
 		}
 	}
@@ -138,31 +146,31 @@ func (m *Manager) provision(ctx context.Context, envName, branch, worktreePath s
 	}
 
 	// 2. Run provisioner service "seed" hooks
-	coreOutputs := make(map[string]map[string]string)
+	provisionerOutputs := make(map[string]map[string]string)
 	for svcName, svc := range m.config.Provisioner.Services {
 		if svc.Seed == "" {
 			continue
 		}
-		seedMsg := fmt.Sprintf("Seeded provisioner service %s", svcName)
-		if err := m.step(ctx, fmt.Sprintf("seed_core_%s", svcName),
-			fmt.Sprintf("Running seed hook for %s...", svcName),
+		seedMsg := fmt.Sprintf("Seeded %s (%s)", svcName, svc.Seed)
+		if err := m.step(ctx, fmt.Sprintf("seed_%s", svcName),
+			fmt.Sprintf("Seeding %s → %s", svcName, svc.Seed),
 			&seedMsg,
 			func() error {
-				m.progress.OnStep(StepEvent{Step: fmt.Sprintf("seed_core_%s", svcName), Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: fmt.Sprintf("seed_%s", svcName), Status: StepStreaming})
 				outputs, err := m.runCoreHook(ctx, svcName, "seed", envName, ports)
 				if err != nil {
 					return err
 				}
-				coreOutputs[svcName] = outputs
+				provisionerOutputs[svcName] = outputs
 				return nil
 			}); err != nil {
-			return nil, fmt.Errorf("seeding provisioner service %s: %w", svcName, err)
+			return nil, fmt.Errorf("seeding %s: %w", svcName, err)
 		}
 	}
 
 	// 3. Generate env files
 	if err := m.step(ctx, "generate_env", "Generating .env.local files...", msg(".env.local files generated"), func() error {
-		return m.envgen.Generate(ctx, envName, worktreePath, ports, coreOutputs)
+		return m.envgen.Generate(ctx, envName, worktreePath, ports, provisionerOutputs)
 	}); err != nil {
 		return nil, fmt.Errorf("generating env files: %w", err)
 	}
@@ -184,7 +192,7 @@ func (m *Manager) provision(ctx context.Context, envName, branch, worktreePath s
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		Ports:       ports,
-		CoreOutputs: coreOutputs,
+		ProvisionerOutputs: provisionerOutputs,
 		Local: &LocalMeta{
 			WorktreePath:       worktreePath,
 			ComposeProjectName: fmt.Sprintf("%s-%s", m.config.Name, envName),
@@ -198,14 +206,18 @@ func (m *Manager) provision(ctx context.Context, envName, branch, worktreePath s
 		return nil, fmt.Errorf("saving state: %w", err)
 	}
 
-	// Run provisioner.after hook if defined
+	// Run provisioner.after hook if defined (runs in the worktree)
 	if m.config.Provisioner.After != "" {
-		env := append(os.Environ(),
-			fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
-			fmt.Sprintf("PREVIEWCTL_PROJECT_NAME=%s", m.config.Name),
-			fmt.Sprintf("PREVIEWCTL_PROJECT_ROOT=%s", m.projectRoot),
-		)
-		if _, err := ExecuteCoreHook(ctx, m.config.Provisioner.After, nil, env, m.projectRoot); err != nil {
+		afterMsg := fmt.Sprintf("Ran provisioner.after (%s)", m.config.Provisioner.After)
+		if err := m.step(ctx, "provisioner_after",
+			fmt.Sprintf("Running provisioner.after → %s", m.config.Provisioner.After),
+			&afterMsg,
+			func() error {
+				m.progress.OnStep(StepEvent{Step: "provisioner_after", Status: StepStreaming})
+				env := m.buildHookEnv(envName, worktreePath, ports)
+				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.After, nil, env, worktreePath)
+				return err
+			}); err != nil {
 			return nil, fmt.Errorf("provisioner after hook: %w", err)
 		}
 	}
@@ -373,6 +385,23 @@ func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName stri
 	return ExecuteCoreHook(ctx, hookScript, requiredOutputs, env, m.projectRoot)
 }
 
+// buildHookEnv constructs environment variables for provisioner hooks.
+func (m *Manager) buildHookEnv(envName, worktreePath string, ports PortMap) []string {
+	env := append(os.Environ(),
+		fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
+		fmt.Sprintf("PREVIEWCTL_PROJECT_NAME=%s", m.config.Name),
+		fmt.Sprintf("PREVIEWCTL_PROJECT_ROOT=%s", m.projectRoot),
+	)
+	if worktreePath != "" {
+		env = append(env, fmt.Sprintf("PREVIEWCTL_WORKTREE_PATH=%s", worktreePath))
+	}
+	for name, port := range ports {
+		env = append(env, fmt.Sprintf("PREVIEWCTL_PORT_%s=%d",
+			strings.ToUpper(strings.ReplaceAll(name, "-", "_")), port))
+	}
+	return env
+}
+
 // CoreInit runs the "init" hook for a provisioner service (one-time setup).
 func (m *Manager) CoreInit(ctx context.Context, svcName string) error {
 	svc, ok := m.config.Provisioner.Services[svcName]
@@ -428,10 +457,10 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 			}
 			// Update stored outputs if hook produced new ones
 			if outputs != nil {
-				if entry.CoreOutputs == nil {
-					entry.CoreOutputs = make(map[string]map[string]string)
+				if entry.ProvisionerOutputs == nil {
+					entry.ProvisionerOutputs = make(map[string]map[string]string)
 				}
-				entry.CoreOutputs[svcName] = outputs
+				entry.ProvisionerOutputs[svcName] = outputs
 				return m.state.SetEnvironment(ctx, envName, entry)
 			}
 			return nil

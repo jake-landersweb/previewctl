@@ -53,7 +53,7 @@ type EnvironmentEntry struct {
 	CreatedAt   time.Time                    `json:"createdAt"`
 	UpdatedAt   time.Time                    `json:"updatedAt"`
 	Ports       PortMap                      `json:"ports"`
-	CoreOutputs map[string]map[string]string `json:"coreOutputs"`
+	ProvisionerOutputs map[string]map[string]string `json:"provisionerOutputs"`
 	Local       *LocalMeta                   `json:"local,omitempty"`
 	Remote      *RemoteMeta                  `json:"remote,omitempty"`
 }
