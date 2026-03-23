@@ -972,6 +972,7 @@ func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName stri
 	}
 	env := append(os.Environ(),
 		fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
+		fmt.Sprintf("PREVIEWCTL_ENVIRONMENT_NAME=%s", SanitizeName(envName)),
 		fmt.Sprintf("PREVIEWCTL_ACTION=%s", action),
 		fmt.Sprintf("PREVIEWCTL_PROJECT_NAME=%s", m.config.Name),
 		fmt.Sprintf("PREVIEWCTL_SERVICE_NAME=%s", svcName),
@@ -991,6 +992,7 @@ func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName stri
 func (m *Manager) buildHookEnv(envName, worktreePath string, ports PortMap) []string {
 	env := append(os.Environ(),
 		fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
+		fmt.Sprintf("PREVIEWCTL_ENVIRONMENT_NAME=%s", SanitizeName(envName)),
 		fmt.Sprintf("PREVIEWCTL_PROJECT_NAME=%s", m.config.Name),
 		fmt.Sprintf("PREVIEWCTL_PROJECT_ROOT=%s", m.projectRoot),
 	)
