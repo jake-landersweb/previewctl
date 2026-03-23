@@ -40,7 +40,7 @@ func newVetCmd() *cobra.Command {
 			}
 
 			// Print summary of what was validated
-			coreCount := len(cfg.Core.Services)
+			coreCount := len(cfg.Provisioner.Services)
 			infraCount := len(cfg.InfraServices)
 			svcCount := len(cfg.Services)
 

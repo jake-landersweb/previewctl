@@ -36,7 +36,7 @@ func Execute() {
 		newDeleteCmd(),
 		newListCmd(),
 		newStatusCmd(),
-		newCoreCmd(),
+		newProvisionerCmd(),
 		newVetCmd(),
 		newCleanCmd(),
 		newVersionCmd(),

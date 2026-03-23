@@ -43,6 +43,10 @@ func (s *stubComputePort) IsRunning(_ context.Context, envName string) (bool, er
 	return err == nil, nil
 }
 
+func (s *stubComputePort) DetectBranch(_ context.Context, _ string) (string, error) {
+	return "main", nil
+}
+
 // stubEnvPort writes a marker file with captured outputs.
 type stubEnvPort struct{}
 
@@ -59,8 +63,6 @@ func (s *stubEnvPort) Generate(_ context.Context, envName string, workdir string
 	}
 	return os.WriteFile(marker, []byte(content), 0o644)
 }
-
-func (s *stubEnvPort) SymlinkSharedEnvFiles(_ context.Context, _ string) error { return nil }
 
 func (s *stubEnvPort) Cleanup(_ context.Context, workdir string) error {
 	_ = os.Remove(filepath.Join(workdir, ".previewctl-env-generated"))
@@ -185,16 +187,14 @@ func setupManagerWithPostgres(t *testing.T) (*domain.Manager, string, string, in
 	config := &domain.ProjectConfig{
 		Version: 1,
 		Name:    "test-project",
-		Core: domain.CoreConfig{
-			Services: map[string]domain.CoreServiceConfig{
+		Provisioner: domain.ProvisionerConfig{
+			Services: map[string]domain.ProvisionerServiceConfig{
 				"postgres": {
 					Outputs: []string{"CONNECTION_STRING", "DB_HOST", "DB_PORT", "DB_NAME"},
-					Hooks: &domain.CoreServiceHooks{
-						Init:    initScript,
-						Seed:    seedScript,
-						Reset:   seedScript,
-						Destroy: destroyScript,
-					},
+					Init:    initScript,
+					Seed:    seedScript,
+					Reset:   seedScript,
+					Destroy: destroyScript,
 				},
 			},
 		},

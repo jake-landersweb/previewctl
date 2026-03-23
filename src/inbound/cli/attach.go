@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 
@@ -39,6 +40,11 @@ The worktree itself is not managed by previewctl and will not be removed on dele
 			info, err := os.Stat(absPath)
 			if err != nil || !info.IsDir() {
 				return fmt.Errorf("worktree path does not exist: %s", absPath)
+			}
+
+			// Verify it's a git repo
+			if err := exec.Command("git", "-C", absPath, "rev-parse", "--git-dir").Run(); err != nil {
+				return fmt.Errorf("%s is not a git repository", absPath)
 			}
 
 			// Resolve name

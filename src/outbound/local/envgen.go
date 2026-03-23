@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -23,7 +22,7 @@ func NewEnvGenAdapter(config *domain.ProjectConfig) *EnvGenAdapter {
 	return &EnvGenAdapter{config: config}
 }
 
-func (a *EnvGenAdapter) Generate(_ context.Context, envName string, workdir string, ports domain.PortMap, coreOutputs map[string]map[string]string) error {
+func (a *EnvGenAdapter) Generate(_ context.Context, envName string, workdir string, ports domain.PortMap, provisionerOutputs map[string]map[string]string) error {
 	// Split ports into service and infrastructure
 	servicePorts := make(domain.PortMap)
 	infraPorts := make(domain.PortMap)
@@ -36,9 +35,9 @@ func (a *EnvGenAdapter) Generate(_ context.Context, envName string, workdir stri
 	}
 
 	ctx := &domain.TemplateContext{
-		ServicePorts: servicePorts,
-		InfraPorts:   infraPorts,
-		CoreOutputs:  coreOutputs,
+		ServicePorts:       servicePorts,
+		InfraPorts:         infraPorts,
+		ProvisionerOutputs: provisionerOutputs,
 	}
 
 	// Group env vars by target file path (service path + env_file)
@@ -70,77 +69,6 @@ func (a *EnvGenAdapter) Generate(_ context.Context, envName string, workdir stri
 	}
 
 	return nil
-}
-
-func (a *EnvGenAdapter) SymlinkSharedEnvFiles(_ context.Context, workdir string) error {
-	if a.config.Local == nil || len(a.config.Local.Worktree.SymlinkPatterns) == 0 {
-		return nil
-	}
-
-	mainWorktree, err := findMainWorktree()
-	if err != nil {
-		return fmt.Errorf("finding main worktree: %w", err)
-	}
-
-	// Walk the main worktree and find files matching any pattern
-	return filepath.Walk(mainWorktree, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // skip inaccessible paths
-		}
-
-		// Skip directories, .git, and node_modules
-		if info.IsDir() {
-			name := info.Name()
-			if name == ".git" || name == "node_modules" || name == ".next" || name == "dist" || name == "build" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Check if the filename matches any pattern
-		matched := false
-		for _, pattern := range a.config.Local.Worktree.SymlinkPatterns {
-			if m, _ := filepath.Match(pattern, info.Name()); m {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return nil
-		}
-
-		// Compute relative path from main worktree
-		relPath, err := filepath.Rel(mainWorktree, path)
-		if err != nil {
-			return nil
-		}
-
-		// Skip files tracked by git — they already exist in the worktree via checkout
-		if isGitTracked(mainWorktree, relPath) {
-			return nil
-		}
-
-		dst := filepath.Join(workdir, relPath)
-
-		// Skip if source and destination are the same file
-		if path == dst {
-			return nil
-		}
-
-		// Ensure destination directory exists
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return fmt.Errorf("creating directory for %s: %w", relPath, err)
-		}
-
-		// Remove existing file/symlink at destination
-		_ = os.Remove(dst)
-
-		if err := os.Symlink(path, dst); err != nil {
-			return fmt.Errorf("symlinking %s: %w", relPath, err)
-		}
-
-		return nil
-	})
 }
 
 func (a *EnvGenAdapter) Cleanup(_ context.Context, workdir string) error {
@@ -180,30 +108,4 @@ func writeEnvFile(path string, envVars map[string]string) error {
 	}
 
 	return os.WriteFile(path, []byte(sb.String()), 0o644)
-}
-
-// isGitTracked checks if a file is tracked by git.
-func isGitTracked(repoDir string, relPath string) bool {
-	cmd := exec.Command("git", "ls-files", "--error-unmatch", relPath)
-	cmd.Dir = repoDir
-	return cmd.Run() == nil
-}
-
-// findMainWorktree returns the path of the main git worktree.
-func findMainWorktree() (string, error) {
-	// Use git to find the main worktree — works from any worktree or the main repo
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("running git worktree list: %w", err)
-	}
-
-	// The first "worktree <path>" line is always the main worktree
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "worktree ") {
-			return strings.TrimPrefix(line, "worktree "), nil
-		}
-	}
-
-	return "", fmt.Errorf("could not determine main git worktree")
 }

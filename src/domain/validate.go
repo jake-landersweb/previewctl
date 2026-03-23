@@ -29,7 +29,7 @@ func (e *ValidationError) hasErrors() bool {
 
 // ValidateConfig performs deep validation of a ProjectConfig.
 // It checks structural correctness, port collisions, dependency references,
-// template variable references, and local config.
+// and template variable references.
 // It does NOT check file system paths — use ValidateConfigWithFS for that.
 func ValidateConfig(cfg *ProjectConfig) error {
 	v := &ValidationError{}
@@ -38,7 +38,6 @@ func ValidateConfig(cfg *ProjectConfig) error {
 	validatePortCollisions(v, cfg)
 	validateDependencyRefs(v, cfg)
 	validateTemplateVars(v, cfg)
-	validateLocalConfig(v, cfg)
 
 	if v.hasErrors() {
 		return v
@@ -56,7 +55,6 @@ func ValidateConfigWithFS(cfg *ProjectConfig, projectRoot string, fileExists fun
 	validatePortCollisions(v, cfg)
 	validateDependencyRefs(v, cfg)
 	validateTemplateVars(v, cfg)
-	validateLocalConfig(v, cfg)
 	validateFilePaths(v, cfg, projectRoot, fileExists)
 
 	if v.hasErrors() {
@@ -84,9 +82,9 @@ func validateRequired(v *ValidationError, cfg *ProjectConfig) {
 			v.addf("service '%s': env_file must be a relative path, got '%s'", name, svc.EnvFile)
 		}
 	}
-	for name, svc := range cfg.Core.Services {
+	for name, svc := range cfg.Provisioner.Services {
 		if len(svc.Outputs) == 0 {
-			v.addf("core service '%s': 'outputs' is required", name)
+			v.addf("provisioner service '%s': 'outputs' is required", name)
 		}
 	}
 	if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile == "" {
@@ -110,7 +108,7 @@ func validatePortCollisions(v *ValidationError, cfg *ProjectConfig) {
 }
 
 func validateDependencyRefs(v *ValidationError, cfg *ProjectConfig) {
-	// Build a set of all known names (services + infrastructure + core services)
+	// Build a set of all known names (services + infrastructure + provisioner services)
 	known := make(map[string]bool)
 	for name := range cfg.Services {
 		known[name] = true
@@ -118,7 +116,7 @@ func validateDependencyRefs(v *ValidationError, cfg *ProjectConfig) {
 	for name := range cfg.InfraServices {
 		known[name] = true
 	}
-	for name := range cfg.Core.Services {
+	for name := range cfg.Provisioner.Services {
 		known[name] = true
 	}
 
@@ -176,23 +174,23 @@ func validateTemplateVars(v *ValidationError, cfg *ProjectConfig) {
 					} else if !validInfra[parts[1]] {
 						v.addf("service '%s' env '%s': references unknown infrastructure '%s' in '{{%s}}'", svcName, envKey, parts[1], varPath)
 					}
-				case "core":
+				case "provisioner":
 					if len(parts) != 3 {
-						v.addf("service '%s' env '%s': invalid template var '{{%s}}' — expected {{core.<service>.<OUTPUT>}}", svcName, envKey, varPath)
+						v.addf("service '%s' env '%s': invalid template var '{{%s}}' — expected {{provisioner.<service>.<OUTPUT>}}", svcName, envKey, varPath)
 					} else {
-						coreSvc, ok := cfg.Core.Services[parts[1]]
+						provSvc, ok := cfg.Provisioner.Services[parts[1]]
 						if !ok {
-							v.addf("service '%s' env '%s': references unknown core service '%s' in '{{%s}}'", svcName, envKey, parts[1], varPath)
+							v.addf("service '%s' env '%s': references unknown provisioner service '%s' in '{{%s}}'", svcName, envKey, parts[1], varPath)
 						} else {
 							found := false
-							for _, o := range coreSvc.Outputs {
+							for _, o := range provSvc.Outputs {
 								if o == parts[2] {
 									found = true
 									break
 								}
 							}
 							if !found {
-								v.addf("service '%s' env '%s': unknown output '%s' for core service '%s' in '{{%s}}'", svcName, envKey, parts[2], parts[1], varPath)
+								v.addf("service '%s' env '%s': unknown output '%s' for provisioner service '%s' in '{{%s}}'", svcName, envKey, parts[2], parts[1], varPath)
 							}
 						}
 					}
@@ -200,17 +198,6 @@ func validateTemplateVars(v *ValidationError, cfg *ProjectConfig) {
 					v.addf("service '%s' env '%s': unknown template namespace '%s' in '{{%s}}'", svcName, envKey, parts[0], varPath)
 				}
 			}
-		}
-	}
-}
-
-func validateLocalConfig(v *ValidationError, cfg *ProjectConfig) {
-	if cfg.Local == nil {
-		return
-	}
-	for _, pattern := range cfg.Local.Worktree.SymlinkPatterns {
-		if _, err := filepath.Match(pattern, "test"); err != nil {
-			v.addf("local.worktree.symlink_patterns: invalid glob pattern '%s': %v", pattern, err)
 		}
 	}
 }
@@ -242,12 +229,9 @@ func validateFilePaths(v *ValidationError, cfg *ProjectConfig, projectRoot strin
 		}
 	}
 
-	// Core service hook file path validation
-	for name, svc := range cfg.Core.Services {
-		if svc.Hooks == nil {
-			continue
-		}
-		for action, script := range map[string]string{"init": svc.Hooks.Init, "seed": svc.Hooks.Seed, "reset": svc.Hooks.Reset, "destroy": svc.Hooks.Destroy} {
+	// Provisioner service hook file path validation
+	for name, svc := range cfg.Provisioner.Services {
+		for action, script := range map[string]string{"init": svc.Init, "seed": svc.Seed, "reset": svc.Reset, "destroy": svc.Destroy} {
 			if script == "" {
 				continue
 			}
@@ -258,7 +242,7 @@ func validateFilePaths(v *ValidationError, cfg *ProjectConfig, projectRoot strin
 					path = filepath.Join(projectRoot, path)
 				}
 				if !fileExists(path) {
-					v.addf("core service '%s': hook '%s' script not found: %s", name, action, path)
+					v.addf("provisioner service '%s': hook '%s' script not found: %s", name, action, path)
 				}
 			}
 		}

@@ -23,7 +23,7 @@ func TestEnvGenAdapter_Generate(t *testing.T) {
 				Path: "apps/backend",
 				Env: map[string]string{
 					"PORT":         "{{services.backend.port}}",
-					"DATABASE_URL": "{{core.main.connection_string}}",
+					"DATABASE_URL": "{{provisioner.main.connection_string}}",
 				},
 			},
 			"web": {

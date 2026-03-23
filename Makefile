@@ -12,6 +12,9 @@ test:
 test-integration:
 	go test -tags integration ./src/...
 
+fmt:
+	go fmt ./src/...
+
 lint:
 	golangci-lint run ./src/...
 

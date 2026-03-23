@@ -46,6 +46,10 @@ func (m *mockComputePort) IsRunning(_ context.Context, envName string) (bool, er
 	return true, nil
 }
 
+func (m *mockComputePort) DetectBranch(_ context.Context, _ string) (string, error) {
+	return "main", nil
+}
+
 // mockNetworkingPort implements NetworkingPort
 type mockNetworkingPort struct {
 	tracker *mockTracker
@@ -67,11 +71,6 @@ type mockEnvPort struct {
 
 func (m *mockEnvPort) Generate(_ context.Context, envName string, workdir string, ports PortMap, coreOutputs map[string]map[string]string) error {
 	m.tracker.record("env.Generate")
-	return nil
-}
-
-func (m *mockEnvPort) SymlinkSharedEnvFiles(_ context.Context, workdir string) error {
-	m.tracker.record("env.SymlinkSharedEnvFiles")
 	return nil
 }
 
@@ -162,9 +161,8 @@ func TestManager_Init_CallOrder(t *testing.T) {
 	}
 
 	expectedOrder := []string{
-		"networking.AllocatePorts",
 		"compute.Create",
-		"env.SymlinkSharedEnvFiles",
+		"networking.AllocatePorts",
 		"env.Generate",
 		"compute.Start",
 		"state.SetEnvironment",
@@ -220,6 +218,47 @@ func TestManager_Destroy_CallOrder(t *testing.T) {
 	expectedOrder := []string{
 		"state.GetEnvironment",
 		"compute.Destroy",
+		"env.Cleanup",
+		"state.RemoveEnvironment",
+	}
+
+	if len(tracker.calls) != len(expectedOrder) {
+		t.Fatalf("expected %d calls, got %d: %v", len(expectedOrder), len(tracker.calls), tracker.calls)
+	}
+
+	for i, expected := range expectedOrder {
+		if tracker.calls[i] != expected {
+			t.Errorf("call %d: expected '%s', got '%s'", i, expected, tracker.calls[i])
+		}
+	}
+}
+
+func TestManager_Destroy_AttachedWorktree(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	// Pre-populate state with an unmanaged (attached) worktree
+	statePort.environments["attached-env"] = &EnvironmentEntry{
+		Name: "attached-env",
+		Local: &LocalMeta{
+			WorktreePath:       "/external/worktrees/attached-env",
+			ComposeProjectName: "myproject-attached-env",
+			ManagedWorktree:    false,
+		},
+	}
+
+	tracker.calls = nil
+
+	err := mgr.Destroy(ctx, "attached-env")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should call Stop (not Destroy) for unmanaged worktrees
+	expectedOrder := []string{
+		"state.GetEnvironment",
+		"compute.Stop",
 		"env.Cleanup",
 		"state.RemoveEnvironment",
 	}
@@ -294,9 +333,9 @@ func TestManager_Init_EmitsProgressEvents(t *testing.T) {
 		t.Fatal("expected progress events")
 	}
 
-	// Verify first event is allocate_ports started
-	if progress.events[0].Step != "allocate_ports" || progress.events[0].Status != StepStarted {
-		t.Errorf("expected first event to be allocate_ports/started, got %s/%s",
+	// Verify first event is create_compute started
+	if progress.events[0].Step != "create_compute" || progress.events[0].Status != StepStarted {
+		t.Errorf("expected first event to be create_compute/started, got %s/%s",
 			progress.events[0].Step, progress.events[0].Status)
 	}
 
@@ -336,16 +375,14 @@ func newTestManagerWithCoreServices(t *testing.T, tracker *mockTracker) (*Manage
 		ProjectRoot: t.TempDir(),
 		Config: &ProjectConfig{
 			Name: "myproject",
-			Core: CoreConfig{
-				Services: map[string]CoreServiceConfig{
+			Provisioner: ProvisionerConfig{
+				Services: map[string]ProvisionerServiceConfig{
 					"postgres": {
 						Outputs: []string{"CONNECTION_STRING", "DB_HOST"},
-						Hooks: &CoreServiceHooks{
-							Init:    `echo "CONNECTION_STRING=postgresql://localhost:5432/db"; echo "DB_HOST=localhost"`,
-							Seed:    `echo "CONNECTION_STRING=postgresql://localhost:5432/wt_${PREVIEWCTL_ENV_NAME}"; echo "DB_HOST=localhost"`,
-							Reset:   `echo "CONNECTION_STRING=postgresql://localhost:5432/wt_${PREVIEWCTL_ENV_NAME}"; echo "DB_HOST=localhost"`,
-							Destroy: `echo "destroyed" >&2`,
-						},
+						Init:    `echo "CONNECTION_STRING=postgresql://localhost:5432/db"; echo "DB_HOST=localhost"`,
+						Seed:    `echo "CONNECTION_STRING=postgresql://localhost:5432/wt_${PREVIEWCTL_ENV_NAME}"; echo "DB_HOST=localhost"`,
+						Reset:   `echo "CONNECTION_STRING=postgresql://localhost:5432/wt_${PREVIEWCTL_ENV_NAME}"; echo "DB_HOST=localhost"`,
+						Destroy: `echo "destroyed" >&2`,
 					},
 				},
 			},

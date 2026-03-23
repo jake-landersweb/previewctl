@@ -9,13 +9,12 @@ func TestParseConfig_Valid(t *testing.T) {
 version: 1
 name: myproject
 
-core:
+provisioner:
   services:
     main:
       outputs: [connection_string, host, port, user, password, database]
-      hooks:
-        init: ./scripts/init-db.sh
-        seed: ./scripts/seed-db.sh
+      init: ./scripts/init-db.sh
+      seed: ./scripts/seed-db.sh
 
 services:
   backend:
@@ -29,10 +28,6 @@ services:
     depends_on: [backend]
     env:
       PORT: "{{services.web.port}}"
-
-local:
-  worktree:
-    symlink_patterns: [".env", ".env.development"]
 `)
 
 	cfg, err := ParseConfig(yaml)
@@ -43,18 +38,15 @@ local:
 	if cfg.Name != "myproject" {
 		t.Errorf("expected name 'myproject', got '%s'", cfg.Name)
 	}
-	if len(cfg.Core.Services) != 1 {
-		t.Fatalf("expected 1 core service, got %d", len(cfg.Core.Services))
+	if len(cfg.Provisioner.Services) != 1 {
+		t.Fatalf("expected 1 provisioner service, got %d", len(cfg.Provisioner.Services))
 	}
-	svc := cfg.Core.Services["main"]
+	svc := cfg.Provisioner.Services["main"]
 	if len(svc.Outputs) != 6 {
 		t.Errorf("expected 6 outputs, got %d", len(svc.Outputs))
 	}
-	if svc.Hooks == nil {
-		t.Fatal("expected hooks config")
-	}
-	if svc.Hooks.Init != "./scripts/init-db.sh" {
-		t.Errorf("expected init hook, got '%s'", svc.Hooks.Init)
+	if svc.Init != "./scripts/init-db.sh" {
+		t.Errorf("expected init hook, got '%s'", svc.Init)
 	}
 
 	if len(cfg.Services) != 2 {
@@ -66,13 +58,6 @@ local:
 	}
 	if len(backend.DependsOn) != 1 || backend.DependsOn[0] != "redis" {
 		t.Errorf("expected dependsOn [redis], got %v", backend.DependsOn)
-	}
-
-	if cfg.Local == nil {
-		t.Fatal("expected local config")
-	}
-	if len(cfg.Local.Worktree.SymlinkPatterns) != 2 {
-		t.Errorf("expected 2 symlink patterns, got %d", len(cfg.Local.Worktree.SymlinkPatterns))
 	}
 }
 
@@ -120,18 +105,17 @@ func TestParseConfig_CoreServiceMissingOutputs(t *testing.T) {
 	yaml := []byte(`
 version: 1
 name: myproject
-core:
+provisioner:
   services:
     main:
-      hooks:
-        init: ./init.sh
+      init: ./init.sh
 services:
   backend:
     path: apps/backend
 `)
 	_, err := ParseConfig(yaml)
 	if err == nil {
-		t.Fatal("expected error for core service missing outputs")
+		t.Fatal("expected error for provisioner service missing outputs")
 	}
 }
 
@@ -147,7 +131,7 @@ services:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Core.Services) != 0 {
-		t.Error("expected no core services")
+	if len(cfg.Provisioner.Services) != 0 {
+		t.Error("expected no provisioner services")
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jake-landersweb/previewctl/src/domain"
 	filestate "github.com/jake-landersweb/previewctl/src/outbound/state"
 	"github.com/spf13/cobra"
 )
@@ -189,7 +188,8 @@ func discoverProjects(cacheDir string) ([]string, error) {
 // findOrphanedWorktrees scans ~/.previewctl/worktrees for directories
 // that aren't tracked in any previewctl state.
 func findOrphanedWorktrees(tracked map[string]bool) []string {
-	base := domain.WorktreeBasePath()
+	home, _ := os.UserHomeDir()
+	base := filepath.Join(home, ".previewctl", "worktrees")
 
 	// Walk project dirs under the base path
 	projectDirs, err := os.ReadDir(base)

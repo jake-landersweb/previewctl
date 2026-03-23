@@ -96,8 +96,7 @@ func TestComputeAdapter_DestroyRemovesContainers(t *testing.T) {
 	t.Cleanup(func() { cleanupCompose(t, composeFile, projectName+"-destroy") })
 
 	config := &domain.ProjectConfig{
-		Name:  projectName,
-		Local: &domain.LocalConfig{},
+		Name: projectName,
 	}
 
 	adapter := &ComputeAdapter{

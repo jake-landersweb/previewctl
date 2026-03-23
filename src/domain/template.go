@@ -10,17 +10,17 @@ var templateVarPattern = regexp.MustCompile(`\{\{([^}]+)\}\}`)
 
 // TemplateContext holds the values available for template substitution.
 type TemplateContext struct {
-	ServicePorts   PortMap
-	InfraPorts     PortMap
-	CoreOutputs    map[string]map[string]string
-	CurrentService string // set per-service during rendering, enables {{self.port}}
+	ServicePorts       PortMap
+	InfraPorts         PortMap
+	ProvisionerOutputs map[string]map[string]string
+	CurrentService     string // set per-service during rendering, enables {{self.port}}
 }
 
 // RenderTemplate replaces {{var}} placeholders in a string with values from the context.
 // Supported variable patterns:
 //   - {{services.<name>.port}} — allocated port for an application service
 //   - {{infrastructure.<name>.port}} — allocated port for an infrastructure service
-//   - {{core.<service>.<OUTPUT>}} — output value from a core service
+//   - {{provisioner.<service>.<OUTPUT>}} — output value from a provisioner service
 func RenderTemplate(tmpl string, ctx *TemplateContext) (string, error) {
 	var renderErr error
 
@@ -99,25 +99,26 @@ func resolveVar(parts []string, ctx *TemplateContext) (string, error) {
 		}
 		return fmt.Sprintf("%d", port), nil
 
-	case "core":
-		return resolveCoreVar(parts[1:], ctx)
+	case "provisioner":
+		return resolveProvisionerVar(parts[1:], ctx)
 
 	default:
 		return "", fmt.Errorf("unknown namespace '%s'", parts[0])
 	}
 }
 
-func resolveCoreVar(parts []string, ctx *TemplateContext) (string, error) {
+// resolveProvisionerVar resolves a provisioner.<service>.<output> template variable.
+func resolveProvisionerVar(parts []string, ctx *TemplateContext) (string, error) {
 	if len(parts) != 2 {
-		return "", fmt.Errorf("expected core.<service>.<output>")
+		return "", fmt.Errorf("expected provisioner.<service>.<output>")
 	}
-	svc, ok := ctx.CoreOutputs[parts[0]]
+	svc, ok := ctx.ProvisionerOutputs[parts[0]]
 	if !ok {
-		return "", fmt.Errorf("unknown core service '%s'", parts[0])
+		return "", fmt.Errorf("unknown provisioner service '%s'", parts[0])
 	}
 	val, ok := svc[parts[1]]
 	if !ok {
-		return "", fmt.Errorf("unknown output '%s' for core service '%s'", parts[1], parts[0])
+		return "", fmt.Errorf("unknown output '%s' for provisioner service '%s'", parts[1], parts[0])
 	}
 	return val, nil
 }
