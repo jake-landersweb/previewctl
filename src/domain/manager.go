@@ -64,21 +64,72 @@ func (m *Manager) step(_ context.Context, name string, startMsg string, complete
 // msg is a convenience for creating a string pointer for step().
 func msg(s string) *string { return &s }
 
-// Init creates a new environment end-to-end: creates a worktree, then provisions it.
+// computeAccessInfo builds ComputeAccessInfo from a ComputeAccess.
+func computeAccessInfo(ca ComputeAccess, managed bool) *ComputeAccessInfo {
+	if ssh, ok := ca.(*DomainSSHComputeAccess); ok {
+		return &ComputeAccessInfo{
+			Type:            "ssh",
+			Host:            ssh.Host(),
+			User:            ssh.User(),
+			Path:            ssh.Root(),
+			ManagedWorktree: managed,
+		}
+	}
+	return &ComputeAccessInfo{
+		Type:            "local",
+		Path:            ca.Root(),
+		ManagedWorktree: managed,
+	}
+}
+
+// ---------- Public lifecycle methods ----------
+
+// Init creates a new environment end-to-end: provisions then runs.
 func (m *Manager) Init(ctx context.Context, envName string, branch string) (*EnvironmentEntry, error) {
 	// PROVISIONER PHASE
-	ca, manifest, err := m.runProvisioner(ctx, envName, branch, "", true)
+	entry, err := m.Provision(ctx, envName, branch)
 	if err != nil {
 		return nil, err
 	}
 
-	// RUNNER PHASE
-	return m.runRunner(ctx, envName, branch, ca, manifest, true)
+	// RUNNER PHASE — read manifest back, run runner
+	ca, manifest, err := m.loadManifestFromEntry(ctx, entry)
+	if err != nil {
+		return nil, err
+	}
+	return m.runRunner(ctx, envName, branch, ca, manifest, true, true)
 }
 
 // Attach creates a preview environment using an existing worktree.
 // The worktree is not managed by previewctl and will not be removed on delete.
 func (m *Manager) Attach(ctx context.Context, envName string, worktreePath string) (*EnvironmentEntry, error) {
+	// PROVISIONER PHASE
+	entry, err := m.ProvisionAttach(ctx, envName, worktreePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// RUNNER PHASE
+	ca, manifest, err := m.loadManifestFromEntry(ctx, entry)
+	if err != nil {
+		return nil, err
+	}
+	return m.runRunner(ctx, envName, entry.Branch, ca, manifest, false, true)
+}
+
+// Provision runs the provisioner phase only: creates compute, seeds, builds manifest, saves state.
+// Does NOT run the runner phase.
+func (m *Manager) Provision(ctx context.Context, envName, branch string) (*EnvironmentEntry, error) {
+	ca, manifest, err := m.runProvisioner(ctx, envName, branch, "", true)
+	if err != nil {
+		return nil, err
+	}
+	return m.saveProvisionedState(ctx, envName, branch, ca, manifest, true)
+}
+
+// ProvisionAttach runs the provisioner phase on an existing worktree.
+// Does NOT run the runner phase.
+func (m *Manager) ProvisionAttach(ctx context.Context, envName, worktreePath string) (*EnvironmentEntry, error) {
 	// Detect branch from the worktree
 	branch, err := m.compute.DetectBranch(ctx, worktreePath)
 	if err != nil {
@@ -94,14 +145,96 @@ func (m *Manager) Attach(ctx context.Context, envName string, worktreePath strin
 		return nil, fmt.Errorf("environment '%s' already exists — use 'delete' first or choose a different name", envName)
 	}
 
-	// PROVISIONER PHASE (skip worktree creation, use existing path)
 	ca, manifest, err := m.runProvisioner(ctx, envName, branch, worktreePath, false)
 	if err != nil {
 		return nil, err
 	}
+	return m.saveProvisionedState(ctx, envName, branch, ca, manifest, false)
+}
 
-	// RUNNER PHASE
-	return m.runRunner(ctx, envName, branch, ca, manifest, false)
+// Run reads a manifest and executes the runner phase only. Stateless — does not persist state.
+func (m *Manager) Run(ctx context.Context, manifestPath string) error {
+	// Read manifest
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("reading manifest: %w", err)
+	}
+	manifest, err := ReadManifest(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("parsing manifest: %w", err)
+	}
+
+	// Construct local ComputeAccess from the directory containing the manifest
+	rootDir := filepath.Dir(manifestPath)
+	if rootDir == "" || rootDir == "." {
+		rootDir, _ = os.Getwd()
+	}
+	ca := NewDomainLocalComputeAccess(rootDir)
+
+	_, err = m.runRunner(ctx, manifest.EnvName, manifest.Branch, ca, manifest, false, false)
+	return err
+}
+
+// SetStatus updates an environment's status.
+func (m *Manager) SetStatus(ctx context.Context, envName string, status EnvironmentStatus) error {
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return fmt.Errorf("loading environment: %w", err)
+	}
+	if entry == nil {
+		return fmt.Errorf("environment '%s' not found", envName)
+	}
+	entry.Status = status
+	entry.UpdatedAt = time.Now()
+	return m.state.SetEnvironment(ctx, envName, entry)
+}
+
+// ---------- Internal provisioner / runner ----------
+
+// saveProvisionedState persists state after the provisioner phase.
+func (m *Manager) saveProvisionedState(ctx context.Context, envName, branch string, ca ComputeAccess, manifest *Manifest, managedWorktree bool) (*EnvironmentEntry, error) {
+	now := time.Now()
+	mode := EnvironmentMode(manifest.Mode)
+	entry := &EnvironmentEntry{
+		Name:               envName,
+		Mode:               mode,
+		Branch:             branch,
+		Status:             StatusProvisioned,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		Ports:              manifest.Ports,
+		ProvisionerOutputs: manifest.ProvisionerOutputs,
+		Compute:            computeAccessInfo(ca, managedWorktree),
+	}
+
+	if err := m.step(ctx, "save_state", "Saving state...", msg("State saved"), func() error {
+		return m.state.SetEnvironment(ctx, envName, entry)
+	}); err != nil {
+		return nil, fmt.Errorf("saving state: %w", err)
+	}
+
+	return entry, nil
+}
+
+// loadManifestFromEntry reads the manifest from an environment's compute location.
+func (m *Manager) loadManifestFromEntry(_ context.Context, entry *EnvironmentEntry) (ComputeAccess, *Manifest, error) {
+	wtPath := entry.WorktreePath()
+	if wtPath == "" {
+		return nil, nil, fmt.Errorf("environment '%s' has no compute path", entry.Name)
+	}
+
+	manifestPath := filepath.Join(wtPath, ".previewctl.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading manifest from %s: %w", manifestPath, err)
+	}
+	manifest, err := ReadManifest(bytes.NewReader(data))
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing manifest: %w", err)
+	}
+
+	ca := NewDomainLocalComputeAccess(wtPath)
+	return ca, manifest, nil
 }
 
 // runProvisioner executes the provisioner phase:
@@ -112,6 +245,7 @@ func (m *Manager) Attach(ctx context.Context, envName string, worktreePath strin
 // 5. Run provisioner service seed hooks
 // 6. Build manifest
 // 7. Write .previewctl.json via ComputeAccess
+// 8. provisioner.after hook
 func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingWorktree string, createWorktree bool) (ComputeAccess, *Manifest, error) {
 	// 1. Run provisioner.before hook if defined
 	if m.config.Provisioner.Before != "" {
@@ -129,11 +263,35 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 		}
 	}
 
-	// 2. Create or reuse compute resources
-	var worktreePath string
-	if existingWorktree != "" {
-		worktreePath = existingWorktree
+	// 2-3. Create compute and construct ComputeAccess
+	var ca ComputeAccess
+	if m.config.Provisioner.Compute != nil && m.config.Provisioner.Compute.Create != "" {
+		// Remote mode: run compute.create hook → returns VM_IP, SSH_USER, REMOTE_ROOT
+		var computeOutputs map[string]string
+		createMsg := "Compute created via hook"
+		if err := m.step(ctx, "create_compute", "Creating remote compute...", &createMsg, func() error {
+			m.progress.OnStep(StepEvent{Step: "create_compute", Status: StepStreaming})
+			env := m.buildHookEnv(envName, "", nil)
+			env = append(env, fmt.Sprintf("PREVIEWCTL_BRANCH=%s", branch))
+			var err error
+			computeOutputs, err = ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Create,
+				m.config.Provisioner.Compute.Outputs, env, m.projectRoot)
+			return err
+		}); err != nil {
+			return nil, nil, fmt.Errorf("compute create hook: %w", err)
+		}
+		host := computeOutputs["VM_IP"]
+		user := computeOutputs["SSH_USER"]
+		root := computeOutputs["REMOTE_ROOT"]
+		if root == "" {
+			root = "/app"
+		}
+		ca = NewDomainSSHComputeAccess(host, user, root)
+	} else if existingWorktree != "" {
+		// Attach mode: use existing local worktree
+		ca = NewDomainLocalComputeAccess(existingWorktree)
 	} else if createWorktree {
+		// Local mode: create git worktree
 		var resources *ComputeResources
 		if err := m.step(ctx, "create_compute", "Creating compute resources...", msg("Compute resources created"), func() error {
 			var err error
@@ -142,11 +300,8 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 		}); err != nil {
 			return nil, nil, fmt.Errorf("creating compute resources: %w", err)
 		}
-		worktreePath = resources.WorktreePath
+		ca = NewDomainLocalComputeAccess(resources.WorktreePath)
 	}
-
-	// 3. Construct ComputeAccess
-	ca := NewDomainLocalComputeAccess(worktreePath)
 
 	// 4. Allocate ports
 	var ports PortMap
@@ -225,14 +380,9 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 	return ca, manifest, nil
 }
 
-// runRunner executes the runner phase:
-// 1. runner.before via ComputeAccess.Exec
-// 2. Generate .env files via ComputeAccess.WriteFile
-// 3. Start infrastructure via compute port
-// 4. runner.deploy via ComputeAccess.Exec
-// 5. runner.after via ComputeAccess.Exec
-// 6. Save state
-func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca ComputeAccess, manifest *Manifest, managedWorktree bool) (*EnvironmentEntry, error) {
+// runRunner executes the runner phase.
+// When saveState is false, state persistence is skipped (used by Run which is stateless).
+func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca ComputeAccess, manifest *Manifest, managedWorktree, saveState bool) (*EnvironmentEntry, error) {
 	// 1. runner.before hook
 	if m.config.Runner != nil && m.config.Runner.Before != "" {
 		beforeMsg := fmt.Sprintf("Ran runner.before (%s)", m.config.Runner.Before)
@@ -304,22 +454,22 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 		}
 	}
 
-	// 6. Persist state
+	// 6. Persist state (skip when stateless, e.g., `previewctl run` on VM)
+	if !saveState {
+		return nil, nil
+	}
+
 	now := time.Now()
 	entry := &EnvironmentEntry{
 		Name:               envName,
-		Mode:               ModeLocal,
+		Mode:               EnvironmentMode(manifest.Mode),
 		Branch:             branch,
 		Status:             StatusRunning,
 		CreatedAt:          now,
 		UpdatedAt:          now,
 		Ports:              manifest.Ports,
 		ProvisionerOutputs: manifest.ProvisionerOutputs,
-		Compute: &ComputeAccessInfo{
-			Type:            "local",
-			Path:            ca.Root(),
-			ManagedWorktree: managedWorktree,
-		},
+		Compute:            computeAccessInfo(ca, managedWorktree),
 	}
 
 	if err := m.step(ctx, "save_state", "Saving state...", msg("State saved"), func() error {
@@ -330,6 +480,8 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 
 	return entry, nil
 }
+
+// ---------- Destroy ----------
 
 // Destroy tears down an environment and cleans up all resources.
 func (m *Manager) Destroy(ctx context.Context, envName string) error {
@@ -349,8 +501,15 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 
 	// Reconstruct ComputeAccess from state
 	var ca ComputeAccess
-	if entry.Compute != nil && entry.Compute.Path != "" {
-		ca = NewDomainLocalComputeAccess(entry.Compute.Path)
+	if entry.Compute != nil {
+		switch entry.Compute.Type {
+		case "ssh":
+			ca = NewDomainSSHComputeAccess(entry.Compute.Host, entry.Compute.User, entry.Compute.Path)
+		case "local":
+			if entry.Compute.Path != "" {
+				ca = NewDomainLocalComputeAccess(entry.Compute.Path)
+			}
+		}
 	}
 
 	// Run runner.destroy hook if defined
@@ -387,24 +546,43 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 		}
 	}
 
-	// Destroy or stop compute
-	if entry.IsManagedWorktree() {
-		if err := m.step(ctx, "destroy_compute", "Removing worktree and stopping containers...", msg("Worktree and containers removed"), func() error {
-			return m.compute.Destroy(ctx, envName)
+	// Run provisioner.compute.destroy hook if defined (terminates VM)
+	if m.config.Provisioner.Compute != nil && m.config.Provisioner.Compute.Destroy != "" {
+		destroyMsg := "Compute destroyed via hook"
+		if err := m.step(ctx, "destroy_compute_hook", "Destroying remote compute...", &destroyMsg, func() error {
+			m.progress.OnStep(StepEvent{Step: "destroy_compute_hook", Status: StepStreaming})
+			env := m.buildHookEnv(envName, "", entry.Ports)
+			if entry.Compute != nil {
+				env = append(env,
+					fmt.Sprintf("PREVIEWCTL_VM_IP=%s", entry.Compute.Host),
+					fmt.Sprintf("PREVIEWCTL_SSH_USER=%s", entry.Compute.User),
+				)
+			}
+			_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Destroy, nil, env, m.projectRoot)
+			return err
 		}); err != nil {
-			return fmt.Errorf("destroying compute resources: %w", err)
+			return fmt.Errorf("compute destroy hook: %w", err)
 		}
-	} else {
-		// Attached worktree — only stop containers, don't remove the worktree
-		if err := m.step(ctx, "stop_infra", "Stopping infrastructure containers...", msg("Infrastructure containers stopped"), func() error {
-			return m.compute.Stop(ctx, envName)
-		}); err != nil {
-			return fmt.Errorf("stopping infrastructure: %w", err)
+	} else if entry.Compute != nil && entry.Compute.Type == "local" {
+		// Local compute: destroy or stop worktree
+		if entry.IsManagedWorktree() {
+			if err := m.step(ctx, "destroy_compute", "Removing worktree and stopping containers...", msg("Worktree and containers removed"), func() error {
+				return m.compute.Destroy(ctx, envName)
+			}); err != nil {
+				return fmt.Errorf("destroying compute resources: %w", err)
+			}
+		} else {
+			// Attached worktree — only stop containers, don't remove the worktree
+			if err := m.step(ctx, "stop_infra", "Stopping infrastructure containers...", msg("Infrastructure containers stopped"), func() error {
+				return m.compute.Stop(ctx, envName)
+			}); err != nil {
+				return fmt.Errorf("stopping infrastructure: %w", err)
+			}
 		}
 	}
 
-	// Clean up .env files via os.Remove (simple cleanup, no ComputeAccess needed for local)
-	if entry.Compute != nil && entry.Compute.Path != "" {
+	// Clean up .env files for local compute
+	if entry.Compute != nil && entry.Compute.Type == "local" && entry.Compute.Path != "" {
 		if err := m.step(ctx, "cleanup_env", "Cleaning up env files...", msg("Env files cleaned up"), func() error {
 			for _, svc := range m.config.Services {
 				envFilePath := filepath.Join(entry.Compute.Path, svc.Path, svc.ResolvedEnvFile())
@@ -424,6 +602,8 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 
 	return nil
 }
+
+// ---------- Query methods ----------
 
 // List returns all tracked environments.
 func (m *Manager) List(ctx context.Context) ([]*EnvironmentEntry, error) {
@@ -458,6 +638,8 @@ func (m *Manager) Status(ctx context.Context, envName string) (*EnvironmentDetai
 		InfraRunning: infraRunning,
 	}, nil
 }
+
+// ---------- Provisioner service hooks ----------
 
 // RunCoreHook runs a provisioner service hook for a given environment, loading ports from state.
 func (m *Manager) RunCoreHook(ctx context.Context, svcName, action, envName string) (map[string]string, error) {
@@ -494,7 +676,6 @@ func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName stri
 		return nil, nil
 	}
 
-	// Build environment variables
 	env := append(os.Environ(),
 		fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
 		fmt.Sprintf("PREVIEWCTL_ACTION=%s", action),
@@ -503,14 +684,12 @@ func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName stri
 		fmt.Sprintf("PREVIEWCTL_PROJECT_ROOT=%s", m.projectRoot),
 	)
 
-	// Add port env vars
 	for name, port := range ports {
 		envVar := fmt.Sprintf("PREVIEWCTL_PORT_%s=%d",
 			strings.ToUpper(strings.ReplaceAll(name, "-", "_")), port)
 		env = append(env, envVar)
 	}
 
-	// Only validate outputs for actions that produce state (seed, reset)
 	var requiredOutputs []string
 	if action == "seed" || action == "reset" {
 		requiredOutputs = svc.Outputs
@@ -589,7 +768,6 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 			if err != nil {
 				return err
 			}
-			// Update stored outputs if hook produced new ones
 			if outputs != nil {
 				if entry.ProvisionerOutputs == nil {
 					entry.ProvisionerOutputs = make(map[string]map[string]string)
@@ -604,6 +782,8 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 
 	return nil
 }
+
+// ---------- DomainLocalComputeAccess ----------
 
 // DomainLocalComputeAccess is a minimal ComputeAccess implementation for use within
 // the domain layer. It avoids importing the outbound/local package.

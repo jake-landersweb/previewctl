@@ -539,3 +539,202 @@ func TestManager_Destroy_WithCoreServices(t *testing.T) {
 	}
 }
 
+func TestManager_Provision_SavesProvisionedState(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	entry, err := mgr.Provision(ctx, "feat-prov", "feat-prov")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if entry.Status != StatusProvisioned {
+		t.Errorf("expected status 'provisioned', got '%s'", entry.Status)
+	}
+	if entry.Compute == nil {
+		t.Fatal("expected Compute to be set")
+	}
+	if entry.Compute.Type != "local" {
+		t.Errorf("expected compute type 'local', got '%s'", entry.Compute.Type)
+	}
+
+	// Verify state was persisted
+	saved := statePort.environments["feat-prov"]
+	if saved == nil {
+		t.Fatal("expected state to be saved")
+	}
+	if saved.Status != StatusProvisioned {
+		t.Errorf("expected saved status 'provisioned', got '%s'", saved.Status)
+	}
+
+	// Verify runner was NOT called (no compute.Start)
+	for _, call := range tracker.calls {
+		if call == "compute.Start" {
+			t.Error("Provision should NOT call compute.Start (runner phase)")
+		}
+	}
+}
+
+func TestManager_Provision_WritesManifest(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, _, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	entry, err := mgr.Provision(ctx, "feat-manifest", "feat-manifest")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify .previewctl.json was written
+	manifestPath := filepath.Join(entry.WorktreePath(), ".previewctl.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("reading manifest: %v", err)
+	}
+
+	manifest, err := ReadManifest(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("parsing manifest: %v", err)
+	}
+
+	if manifest.EnvName != "feat-manifest" {
+		t.Errorf("expected env_name 'feat-manifest', got '%s'", manifest.EnvName)
+	}
+	if manifest.Mode != "local" {
+		t.Errorf("expected mode 'local', got '%s'", manifest.Mode)
+	}
+}
+
+func TestManager_Init_CallsProvisionThenRunner(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	entry, err := mgr.Init(ctx, "feat-full", "feat-full")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Init should result in StatusRunning (not StatusProvisioned)
+	if entry.Status != StatusRunning {
+		t.Errorf("expected status 'running', got '%s'", entry.Status)
+	}
+
+	// Verify compute.Start was called (runner ran)
+	hasStart := false
+	for _, call := range tracker.calls {
+		if call == "compute.Start" {
+			hasStart = true
+		}
+	}
+	if !hasStart {
+		t.Error("expected compute.Start to be called (runner phase)")
+	}
+
+	// State should show running
+	saved := statePort.environments["feat-full"]
+	if saved == nil {
+		t.Fatal("expected state to be saved")
+	}
+	if saved.Status != StatusRunning {
+		t.Errorf("expected saved status 'running', got '%s'", saved.Status)
+	}
+}
+
+func TestManager_Run_Stateless(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	// First provision to get a manifest
+	entry, err := mgr.Provision(ctx, "feat-run", "feat-run")
+	if err != nil {
+		t.Fatalf("Provision error: %v", err)
+	}
+
+	manifestPath := filepath.Join(entry.WorktreePath(), ".previewctl.json")
+
+	// Reset tracker
+	tracker.calls = nil
+
+	// Run from manifest
+	err = mgr.Run(ctx, manifestPath)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	// Verify compute.Start was called (runner ran)
+	hasStart := false
+	for _, call := range tracker.calls {
+		if call == "compute.Start" {
+			hasStart = true
+		}
+	}
+	if !hasStart {
+		t.Error("expected compute.Start to be called")
+	}
+
+	// State should still show "provisioned" — Run is stateless
+	saved := statePort.environments["feat-run"]
+	if saved.Status != StatusProvisioned {
+		t.Errorf("expected status to remain 'provisioned', got '%s'", saved.Status)
+	}
+}
+
+func TestManager_SetStatus(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	statePort.environments["test-env"] = &EnvironmentEntry{
+		Name:   "test-env",
+		Status: StatusProvisioned,
+	}
+
+	err := mgr.SetStatus(ctx, "test-env", StatusRunning)
+	if err != nil {
+		t.Fatalf("SetStatus error: %v", err)
+	}
+
+	if statePort.environments["test-env"].Status != StatusRunning {
+		t.Errorf("expected status 'running', got '%s'", statePort.environments["test-env"].Status)
+	}
+}
+
+func TestComputeAccessInfo_Local(t *testing.T) {
+	ca := NewDomainLocalComputeAccess("/some/path")
+	info := computeAccessInfo(ca, true)
+
+	if info.Type != "local" {
+		t.Errorf("expected type 'local', got '%s'", info.Type)
+	}
+	if info.Path != "/some/path" {
+		t.Errorf("expected path '/some/path', got '%s'", info.Path)
+	}
+	if !info.ManagedWorktree {
+		t.Error("expected ManagedWorktree=true")
+	}
+}
+
+func TestComputeAccessInfo_SSH(t *testing.T) {
+	ca := NewDomainSSHComputeAccess("1.2.3.4", "deploy", "/app")
+	info := computeAccessInfo(ca, false)
+
+	if info.Type != "ssh" {
+		t.Errorf("expected type 'ssh', got '%s'", info.Type)
+	}
+	if info.Host != "1.2.3.4" {
+		t.Errorf("expected host '1.2.3.4', got '%s'", info.Host)
+	}
+	if info.User != "deploy" {
+		t.Errorf("expected user 'deploy', got '%s'", info.User)
+	}
+	if info.Path != "/app" {
+		t.Errorf("expected path '/app', got '%s'", info.Path)
+	}
+	if info.ManagedWorktree {
+		t.Error("expected ManagedWorktree=false")
+	}
+}
+

@@ -15,10 +15,11 @@ const (
 type EnvironmentStatus string
 
 const (
-	StatusCreating EnvironmentStatus = "creating"
-	StatusRunning  EnvironmentStatus = "running"
-	StatusStopped  EnvironmentStatus = "stopped"
-	StatusError    EnvironmentStatus = "error"
+	StatusCreating     EnvironmentStatus = "creating"
+	StatusProvisioned  EnvironmentStatus = "provisioned"
+	StatusRunning      EnvironmentStatus = "running"
+	StatusStopped      EnvironmentStatus = "stopped"
+	StatusError        EnvironmentStatus = "error"
 )
 
 // PortMap maps service names to allocated ports.
