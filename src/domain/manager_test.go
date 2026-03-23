@@ -19,8 +19,8 @@ func (t *mockTracker) record(call string) {
 
 // mockComputePort implements ComputePort
 type mockComputePort struct {
-	tracker  *mockTracker
-	baseDir  string // temp dir for worktrees
+	tracker *mockTracker
+	baseDir string // temp dir for worktrees
 }
 
 func (m *mockComputePort) Create(_ context.Context, envName string, branch string) (*ComputeResources, error) {
@@ -160,10 +160,10 @@ func TestManager_Init_CallOrder(t *testing.T) {
 
 	// Verify key operations happened in order
 	expectedOps := map[string]bool{
-		"compute.Create":        false,
+		"compute.Create":           false,
 		"networking.AllocatePorts": false,
-		"compute.Start":         false,
-		"state.SetEnvironment":  false,
+		"compute.Start":            false,
+		"state.SetEnvironment":     false,
 	}
 	for _, call := range tracker.calls {
 		if _, ok := expectedOps[call]; ok {
@@ -251,7 +251,7 @@ func TestManager_Destroy_CallOrder(t *testing.T) {
 
 	expectedOps := map[string]bool{
 		"state.GetEnvironment":    false,
-		"compute.Destroy":        false,
+		"compute.Destroy":         false,
 		"state.RemoveEnvironment": false,
 	}
 	for _, call := range tracker.calls {
@@ -544,7 +544,7 @@ func TestManager_Provision_SavesProvisionedState(t *testing.T) {
 	mgr, statePort, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	entry, err := mgr.Provision(ctx, "feat-prov", "feat-prov")
+	entry, err := mgr.Provision(ctx, "feat-prov", "feat-prov", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -581,7 +581,7 @@ func TestManager_Provision_WritesManifest(t *testing.T) {
 	mgr, _, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	entry, err := mgr.Provision(ctx, "feat-manifest", "feat-manifest")
+	entry, err := mgr.Provision(ctx, "feat-manifest", "feat-manifest", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -648,7 +648,7 @@ func TestManager_Run_Stateless(t *testing.T) {
 	ctx := context.Background()
 
 	// First provision to get a manifest
-	entry, err := mgr.Provision(ctx, "feat-run", "feat-run")
+	entry, err := mgr.Provision(ctx, "feat-run", "feat-run", "")
 	if err != nil {
 		t.Fatalf("Provision error: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestManager_Run_Stateless(t *testing.T) {
 	tracker.calls = nil
 
 	// Run from manifest
-	err = mgr.Run(ctx, manifestPath)
+	err = mgr.Run(ctx, manifestPath, "")
 	if err != nil {
 		t.Fatalf("Run error: %v", err)
 	}
@@ -738,3 +738,264 @@ func TestComputeAccessInfo_SSH(t *testing.T) {
 	}
 }
 
+// ---------- Checkpoint tests ----------
+
+func TestManager_Provision_RecordsSteps(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	_, err := mgr.Provision(ctx, "feat-steps", "feat-steps", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry := statePort.environments["feat-steps"]
+	if entry.Steps == nil {
+		t.Fatal("expected Steps to be populated")
+	}
+
+	// Check key steps were recorded
+	for _, stepName := range []string{"create_compute", "allocate_ports", "build_manifest", "write_manifest"} {
+		if !entry.StepCompleted(stepName) {
+			t.Errorf("expected step '%s' to be completed", stepName)
+		}
+	}
+
+	// Check audit log has entries
+	if len(entry.AuditLog) == 0 {
+		t.Error("expected audit log entries")
+	}
+}
+
+func TestManager_Provision_IdempotentRerun(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, _, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	// First provision
+	_, err := mgr.Provision(ctx, "feat-idem", "feat-idem", "")
+	if err != nil {
+		t.Fatalf("first provision error: %v", err)
+	}
+
+	// Count compute.Create calls
+	createCount1 := 0
+	for _, call := range tracker.calls {
+		if call == "compute.Create" {
+			createCount1++
+		}
+	}
+
+	// Second provision — should skip completed steps
+	tracker.calls = nil
+	_, err = mgr.Provision(ctx, "feat-idem", "feat-idem", "")
+	if err != nil {
+		t.Fatalf("second provision error: %v", err)
+	}
+
+	// compute.Create should NOT be called again (cached + verified)
+	createCount2 := 0
+	for _, call := range tracker.calls {
+		if call == "compute.Create" {
+			createCount2++
+		}
+	}
+	if createCount2 > 0 {
+		t.Errorf("expected compute.Create to be skipped on re-run, but was called %d times", createCount2)
+	}
+}
+
+func TestManager_Provision_FromStep(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	// First provision
+	_, err := mgr.Provision(ctx, "feat-from", "feat-from", "")
+	if err != nil {
+		t.Fatalf("first provision error: %v", err)
+	}
+
+	// Verify allocate_ports is completed
+	if !statePort.environments["feat-from"].StepCompleted("allocate_ports") {
+		t.Fatal("expected allocate_ports to be completed")
+	}
+
+	// Re-provision with --from allocate_ports
+	tracker.calls = nil
+	_, err = mgr.Provision(ctx, "feat-from", "feat-from", "allocate_ports")
+	if err != nil {
+		t.Fatalf("second provision error: %v", err)
+	}
+
+	// allocate_ports should have been re-executed (verify via tracker)
+	hasAllocate := false
+	for _, call := range tracker.calls {
+		if call == "networking.AllocatePorts" {
+			hasAllocate = true
+		}
+	}
+	if !hasAllocate {
+		t.Error("expected allocate_ports to be re-executed after --from")
+	}
+}
+
+func TestManager_Provision_NoCache(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, _, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	// First provision
+	_, err := mgr.Provision(ctx, "feat-nocache", "feat-nocache", "")
+	if err != nil {
+		t.Fatalf("first provision error: %v", err)
+	}
+
+	// Second provision with noCache
+	tracker.calls = nil
+	mgr.SetNoCache(true)
+	_, err = mgr.Provision(ctx, "feat-nocache", "feat-nocache", "")
+	if err != nil {
+		t.Fatalf("second provision error: %v", err)
+	}
+
+	// compute.Create should be called again
+	hasCreate := false
+	for _, call := range tracker.calls {
+		if call == "compute.Create" {
+			hasCreate = true
+		}
+	}
+	if !hasCreate {
+		t.Error("expected compute.Create to be called with --no-cache")
+	}
+}
+
+func TestManager_Provision_AuditLog(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	_, err := mgr.Provision(ctx, "feat-audit", "feat-audit", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry := statePort.environments["feat-audit"]
+	if len(entry.AuditLog) == 0 {
+		t.Fatal("expected audit log entries")
+	}
+
+	// Verify audit entries have machine and action
+	for _, a := range entry.AuditLog {
+		if a.Machine == "" {
+			t.Error("expected Machine to be set in audit entry")
+		}
+		if a.Action == "" {
+			t.Error("expected Action to be set in audit entry")
+		}
+		if a.Step == "" {
+			t.Error("expected Step to be set in audit entry")
+		}
+	}
+
+	// First entry should be "executed" for create_compute
+	found := false
+	for _, a := range entry.AuditLog {
+		if a.Step == "create_compute" && a.Action == "executed" {
+			found = true
+			if a.DurationMs < 0 {
+				t.Error("expected non-negative duration")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected audit entry for create_compute/executed")
+	}
+}
+
+func TestManager_StepRecord_Outputs(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	_, err := mgr.Provision(ctx, "feat-outputs", "feat-outputs", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry := statePort.environments["feat-outputs"]
+
+	// Check allocate_ports has outputs
+	outputs := entry.StepOutputs("allocate_ports")
+	if outputs == nil {
+		t.Fatal("expected allocate_ports to have outputs")
+	}
+	if outputs["ports"] == nil {
+		t.Error("expected ports in allocate_ports outputs")
+	}
+}
+
+func TestEnvironmentEntry_InvalidateStepsFrom(t *testing.T) {
+	entry := &EnvironmentEntry{
+		Steps: map[string]*StepRecord{
+			"step_a": {Name: "step_a", Status: StepRecordCompleted},
+			"step_b": {Name: "step_b", Status: StepRecordCompleted},
+			"step_c": {Name: "step_c", Status: StepRecordCompleted},
+		},
+	}
+
+	order := []string{"step_a", "step_b", "step_c"}
+	entry.InvalidateStepsFrom("step_b", order)
+
+	if !entry.StepCompleted("step_a") {
+		t.Error("step_a should not be invalidated")
+	}
+	if entry.StepCompleted("step_b") {
+		t.Error("step_b should be invalidated")
+	}
+	if entry.StepCompleted("step_c") {
+		t.Error("step_c should be invalidated")
+	}
+
+	// Check audit log has invalidation entries
+	invalidated := 0
+	for _, a := range entry.AuditLog {
+		if a.Action == "invalidated" {
+			invalidated++
+		}
+	}
+	if invalidated != 2 {
+		t.Errorf("expected 2 invalidation audit entries, got %d", invalidated)
+	}
+}
+
+func TestManager_Init_RecordsStepsAndRunning(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+
+	entry, err := mgr.Init(ctx, "feat-init-steps", "feat-init-steps")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if entry.Status != StatusRunning {
+		t.Errorf("expected status 'running', got '%s'", entry.Status)
+	}
+
+	saved := statePort.environments["feat-init-steps"]
+	if saved.Steps == nil {
+		t.Fatal("expected Steps to be populated")
+	}
+
+	// Both provisioner and runner steps should be recorded
+	if !saved.StepCompleted("create_compute") {
+		t.Error("expected create_compute step")
+	}
+	if !saved.StepCompleted("start_infra") {
+		t.Error("expected start_infra step")
+	}
+}

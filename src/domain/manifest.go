@@ -11,15 +11,15 @@ import (
 // Manifest is the single source of truth written to the compute location.
 // It contains fully resolved values — no template variables.
 type Manifest struct {
-	Version            int                           `json:"version"`
-	EnvName            string                        `json:"env_name"`
-	ProjectName        string                        `json:"project_name"`
-	Branch             string                        `json:"branch"`
-	Mode               string                        `json:"mode"`
-	Ports              PortMap                       `json:"ports"`
-	ProvisionerOutputs map[string]map[string]string  `json:"provisioner_outputs,omitempty"`
-	Services           map[string]ManifestService    `json:"services,omitempty"`
-	Infrastructure     *ManifestInfrastructure       `json:"infrastructure,omitempty"`
+	Version            int                          `json:"version"`
+	EnvName            string                       `json:"env_name"`
+	ProjectName        string                       `json:"project_name"`
+	Branch             string                       `json:"branch"`
+	Mode               string                       `json:"mode"`
+	Ports              PortMap                      `json:"ports"`
+	ProvisionerOutputs map[string]map[string]string `json:"provisioner_outputs,omitempty"`
+	Services           map[string]ManifestService   `json:"services,omitempty"`
+	Infrastructure     *ManifestInfrastructure      `json:"infrastructure,omitempty"`
 }
 
 // ManifestService describes a service with fully resolved env vars.

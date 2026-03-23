@@ -38,13 +38,13 @@ func TestFileStateAdapter_RoundTrip(t *testing.T) {
 
 	now := time.Now()
 	entry := &domain.EnvironmentEntry{
-		Name:        "feat-auth",
-		Mode:        domain.ModeLocal,
-		Branch:      "feat-auth",
-		Status:      domain.StatusRunning,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Ports:       domain.PortMap{"backend": 8042, "web": 3042},
+		Name:               "feat-auth",
+		Mode:               domain.ModeLocal,
+		Branch:             "feat-auth",
+		Status:             domain.StatusRunning,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		Ports:              domain.PortMap{"backend": 8042, "web": 3042},
 		ProvisionerOutputs: make(map[string]map[string]string),
 		Compute: &domain.ComputeAccessInfo{
 			Type:            "local",

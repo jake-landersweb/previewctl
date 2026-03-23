@@ -9,7 +9,11 @@ import (
 )
 
 func newRunCmd() *cobra.Command {
-	var manifestPath string
+	var (
+		manifestPath string
+		fromStep     string
+		noCache      bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -44,11 +48,14 @@ hook configuration from previewctl.yaml in the current repo.`,
 			if err != nil {
 				return err
 			}
+			if noCache {
+				mgr.SetNoCache(true)
+			}
 
 			Header("Running from manifest")
 			KeyValue("Manifest", absPath)
 
-			if err := mgr.Run(cmd.Context(), absPath); err != nil {
+			if err := mgr.Run(cmd.Context(), absPath, fromStep); err != nil {
 				return err
 			}
 
@@ -58,6 +65,8 @@ hook configuration from previewctl.yaml in the current repo.`,
 	}
 
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to .previewctl.json (defaults to ./.previewctl.json)")
+	cmd.Flags().StringVar(&fromStep, "from", "", "Force re-run from this step (invalidates subsequent steps)")
+	cmd.Flags().BoolVar(&noCache, "no-cache", false, "Skip all step caching, re-run everything")
 
 	return cmd
 }

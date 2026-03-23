@@ -38,6 +38,7 @@ func Execute() {
 		newStatusCmd(),
 		newProvisionCmd(),
 		newRunCmd(),
+		newStepsCmd(),
 		newProvisionerCmd(),
 		newVetCmd(),
 		newCleanCmd(),

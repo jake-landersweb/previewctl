@@ -9,8 +9,10 @@ import (
 
 func newProvisionCmd() *cobra.Command {
 	var (
-		branch string
-		mode   string
+		branch   string
+		mode     string
+		fromStep string
+		noCache  bool
 	)
 
 	cmd := &cobra.Command{
@@ -34,11 +36,14 @@ on the target compute to execute the runner phase.`,
 			if err != nil {
 				return err
 			}
+			if noCache {
+				mgr.SetNoCache(true)
+			}
 
 			Header(fmt.Sprintf("Provisioning environment %s",
 				styleDetail.Render(envName)))
 
-			entry, err := mgr.Provision(cmd.Context(), envName, branch)
+			entry, err := mgr.Provision(cmd.Context(), envName, branch, fromStep)
 			if err != nil {
 				return err
 			}
@@ -72,6 +77,8 @@ on the target compute to execute the runner phase.`,
 
 	cmd.Flags().StringVarP(&branch, "branch", "b", "", "Git branch name (defaults to environment name)")
 	cmd.Flags().StringVarP(&mode, "mode", "m", "local", "Deployment mode (local, remote)")
+	cmd.Flags().StringVar(&fromStep, "from", "", "Force re-run from this step (invalidates subsequent steps)")
+	cmd.Flags().BoolVar(&noCache, "no-cache", false, "Skip all step caching, re-run everything")
 
 	return cmd
 }

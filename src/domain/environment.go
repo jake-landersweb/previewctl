@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"os"
+	"time"
+)
 
 // EnvironmentMode represents the deployment mode of an environment.
 type EnvironmentMode string
@@ -15,11 +19,11 @@ const (
 type EnvironmentStatus string
 
 const (
-	StatusCreating     EnvironmentStatus = "creating"
-	StatusProvisioned  EnvironmentStatus = "provisioned"
-	StatusRunning      EnvironmentStatus = "running"
-	StatusStopped      EnvironmentStatus = "stopped"
-	StatusError        EnvironmentStatus = "error"
+	StatusCreating    EnvironmentStatus = "creating"
+	StatusProvisioned EnvironmentStatus = "provisioned"
+	StatusRunning     EnvironmentStatus = "running"
+	StatusStopped     EnvironmentStatus = "stopped"
+	StatusError       EnvironmentStatus = "error"
 )
 
 // PortMap maps service names to allocated ports.
@@ -47,6 +51,37 @@ func ComposeProjectName(projectName, envName string) string {
 	return projectName + "-" + envName
 }
 
+// StepRecordStatus represents the persisted outcome of a step.
+type StepRecordStatus string
+
+const (
+	StepRecordCompleted StepRecordStatus = "completed"
+	StepRecordFailed    StepRecordStatus = "failed"
+)
+
+// StepRecord is the checkpoint persisted for a single step execution.
+type StepRecord struct {
+	Name       string           `json:"name"`
+	Status     StepRecordStatus `json:"status"`
+	StartedAt  time.Time        `json:"startedAt"`
+	FinishedAt time.Time        `json:"finishedAt"`
+	DurationMs int64            `json:"durationMs"`
+	Machine    string           `json:"machine"`
+	Error      string           `json:"error,omitempty"`
+	Outputs    map[string]any   `json:"outputs,omitempty"`
+}
+
+// AuditEntry is an append-only log entry recording what happened during lifecycle operations.
+type AuditEntry struct {
+	Timestamp  time.Time `json:"timestamp"`
+	Step       string    `json:"step"`
+	Action     string    `json:"action"` // "executed", "skipped", "verified", "verify_failed", "invalidated", "failed"
+	Machine    string    `json:"machine"`
+	DurationMs int64     `json:"durationMs,omitempty"`
+	Message    string    `json:"message,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
 // EnvironmentEntry is a tracked environment persisted in state.
 type EnvironmentEntry struct {
 	Name               string                       `json:"name"`
@@ -58,6 +93,8 @@ type EnvironmentEntry struct {
 	Ports              PortMap                      `json:"ports"`
 	ProvisionerOutputs map[string]map[string]string `json:"provisionerOutputs"`
 	Compute            *ComputeAccessInfo           `json:"compute,omitempty"`
+	Steps              map[string]*StepRecord       `json:"steps,omitempty"`
+	AuditLog           []AuditEntry                 `json:"auditLog,omitempty"`
 }
 
 // WorktreePath returns the worktree path from ComputeAccessInfo, or empty string.
@@ -71,6 +108,71 @@ func (e *EnvironmentEntry) WorktreePath() string {
 // IsManagedWorktree returns whether the worktree was created by previewctl.
 func (e *EnvironmentEntry) IsManagedWorktree() bool {
 	return e.Compute != nil && e.Compute.ManagedWorktree
+}
+
+// StepCompleted returns true if the named step has a "completed" record.
+func (e *EnvironmentEntry) StepCompleted(name string) bool {
+	if e.Steps == nil {
+		return false
+	}
+	r, ok := e.Steps[name]
+	return ok && r.Status == StepRecordCompleted
+}
+
+// SetStepRecord records a step completion/failure.
+func (e *EnvironmentEntry) SetStepRecord(rec *StepRecord) {
+	if e.Steps == nil {
+		e.Steps = make(map[string]*StepRecord)
+	}
+	e.Steps[rec.Name] = rec
+	e.UpdatedAt = rec.FinishedAt
+}
+
+// AppendAudit adds an audit log entry.
+func (e *EnvironmentEntry) AppendAudit(entry AuditEntry) {
+	e.AuditLog = append(e.AuditLog, entry)
+}
+
+// StepOutputs returns the outputs map for a completed step, or nil.
+func (e *EnvironmentEntry) StepOutputs(name string) map[string]any {
+	if e.Steps == nil {
+		return nil
+	}
+	r, ok := e.Steps[name]
+	if !ok || r.Status != StepRecordCompleted {
+		return nil
+	}
+	return r.Outputs
+}
+
+// InvalidateStepsFrom removes checkpoint records for the named step and all
+// steps that come after it in the given ordered step list.
+func (e *EnvironmentEntry) InvalidateStepsFrom(stepName string, orderedSteps []string) {
+	found := false
+	for _, s := range orderedSteps {
+		if s == stepName {
+			found = true
+		}
+		if found {
+			delete(e.Steps, s)
+			e.AppendAudit(AuditEntry{
+				Timestamp: time.Now(),
+				Step:      s,
+				Action:    "invalidated",
+				Machine:   Hostname(),
+				Message:   fmt.Sprintf("Invalidated due to --from %s", stepName),
+			})
+		}
+	}
+}
+
+// Hostname returns the machine hostname for audit logging.
+func Hostname() string {
+	h, _ := os.Hostname()
+	if h == "" {
+		return "unknown"
+	}
+	return h
 }
 
 // EnvironmentDetail is an enriched view with live infrastructure checks.
