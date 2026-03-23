@@ -9,56 +9,53 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newCoreCmd() *cobra.Command {
+func newProvisionerCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "core",
-		Short: "Manage core services",
-		Long:  "Manage core services defined in your previewctl.yaml. Run 'previewctl core <name> --help' to see available actions.",
+		Use:   "provisioner",
+		Short: "Manage provisioner services",
+		Long:  "Manage provisioner services defined in your previewctl.yaml. Run 'previewctl provisioner <name> --help' to see available actions.",
 	}
 
 	if cfg, _, err := loadConfig(); err == nil {
-		addCoreServiceCommands(cmd, cfg)
+		addProvisionerServiceCommands(cmd, cfg)
 	}
 
 	return cmd
 }
 
-func addCoreServiceCommands(parent *cobra.Command, cfg *domain.ProjectConfig) {
-	for name, svc := range cfg.Core.Services {
-		svcCmd := newCoreServiceCmd(name, svc)
+func addProvisionerServiceCommands(parent *cobra.Command, cfg *domain.ProjectConfig) {
+	for name, svc := range cfg.Provisioner.Services {
+		svcCmd := newProvisionerServiceCmd(name, svc)
 		parent.AddCommand(svcCmd)
 	}
 }
 
-func newCoreServiceCmd(name string, svc domain.CoreServiceConfig) *cobra.Command {
+func newProvisionerServiceCmd(name string, svc domain.ProvisionerServiceConfig) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   name,
-		Short: fmt.Sprintf("Manage core service: %s", name),
+		Short: fmt.Sprintf("Manage provisioner service: %s", name),
 	}
 
-	// Only add commands for hooks that are defined
-	if svc.Hooks != nil {
-		if svc.Hooks.Init != "" {
-			cmd.AddCommand(newCoreInitCmd(name))
-		}
-		if svc.Hooks.Seed != "" {
-			cmd.AddCommand(newCoreSeedCmd(name))
-		}
-		if svc.Hooks.Reset != "" {
-			cmd.AddCommand(newCoreResetCmd(name))
-		}
-		if svc.Hooks.Destroy != "" {
-			cmd.AddCommand(newCoreDestroyCmd(name))
-		}
+	if svc.Init != "" {
+		cmd.AddCommand(newProvisionerInitCmd(name))
+	}
+	if svc.Seed != "" {
+		cmd.AddCommand(newProvisionerSeedCmd(name))
+	}
+	if svc.Reset != "" {
+		cmd.AddCommand(newProvisionerResetCmd(name))
+	}
+	if svc.Destroy != "" {
+		cmd.AddCommand(newProvisionerDestroyCmd(name))
 	}
 
 	return cmd
 }
 
-func newCoreInitCmd(svcName string) *cobra.Command {
+func newProvisionerInitCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Run one-time initialization for this core service",
+		Short: "Run one-time initialization",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			progress := NewCLIProgressReporter()
 			mgr, _, err := buildManager(progress)
@@ -72,13 +69,13 @@ func newCoreInitCmd(svcName string) *cobra.Command {
 				return err
 			}
 
-			Success(fmt.Sprintf("Core service %s initialized", svcName))
+			Success(fmt.Sprintf("Service %s initialized", svcName))
 			return nil
 		},
 	}
 }
 
-func newCoreSeedCmd(svcName string) *cobra.Command {
+func newProvisionerSeedCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "seed [env]",
 		Short: "Run the seed hook for a specific environment",
@@ -111,16 +108,16 @@ func newCoreSeedCmd(svcName string) *cobra.Command {
 				DetailKeyValue(k, v)
 			}
 
-			Success(fmt.Sprintf("Core service %s seeded for %s", svcName, envName))
+			Success(fmt.Sprintf("Service %s seeded for %s", svcName, envName))
 			return nil
 		},
 	}
 }
 
-func newCoreResetCmd(svcName string) *cobra.Command {
+func newProvisionerResetCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "reset [env]",
-		Short: "Reset this core service for a specific environment",
+		Short: "Reset this service for a specific environment",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			progress := NewCLIProgressReporter()
@@ -145,16 +142,16 @@ func newCoreResetCmd(svcName string) *cobra.Command {
 				return err
 			}
 
-			Success(fmt.Sprintf("Core service %s reset for %s", svcName, envName))
+			Success(fmt.Sprintf("Service %s reset for %s", svcName, envName))
 			return nil
 		},
 	}
 }
 
-func newCoreDestroyCmd(svcName string) *cobra.Command {
+func newProvisionerDestroyCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "destroy [env]",
-		Short: "Destroy this core service for a specific environment",
+		Short: "Destroy this service for a specific environment",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			progress := NewCLIProgressReporter()
@@ -181,7 +178,7 @@ func newCoreDestroyCmd(svcName string) *cobra.Command {
 			}
 			_ = outputs
 
-			Success(fmt.Sprintf("Core service %s destroyed for %s", svcName, envName))
+			Success(fmt.Sprintf("Service %s destroyed for %s", svcName, envName))
 			return nil
 		},
 	}

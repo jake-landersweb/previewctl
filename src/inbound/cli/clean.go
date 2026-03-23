@@ -62,14 +62,11 @@ Resources are shown for review before any deletion occurs.`,
 					continue
 				}
 				for _, entry := range state.Environments {
-					if entry.Local != nil {
-						if entry.Local.WorktreePath != "" {
-							trackedWorktrees[entry.Local.WorktreePath] = true
-						}
-						if entry.Local.ComposeProjectName != "" {
-							trackedComposeProjects[entry.Local.ComposeProjectName] = true
-						}
+					if wt := entry.WorktreePath(); wt != "" {
+						trackedWorktrees[wt] = true
 					}
+					composeName := domain.ComposeProjectName(proj, entry.Name)
+					trackedComposeProjects[composeName] = true
 				}
 			}
 			spinner.Stop()
@@ -189,7 +186,8 @@ func discoverProjects(cacheDir string) ([]string, error) {
 // findOrphanedWorktrees scans ~/.previewctl/worktrees for directories
 // that aren't tracked in any previewctl state.
 func findOrphanedWorktrees(tracked map[string]bool) []string {
-	base := domain.WorktreeBasePath()
+	home, _ := os.UserHomeDir()
+	base := filepath.Join(home, ".previewctl", "worktrees")
 
 	// Walk project dirs under the base path
 	projectDirs, err := os.ReadDir(base)

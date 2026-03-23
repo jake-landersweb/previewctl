@@ -5,7 +5,7 @@ import "testing"
 func TestResolveEnvironmentFromCwd_ExactMatch(t *testing.T) {
 	envs := map[string]*EnvironmentEntry{
 		"feat-auth": {
-			Local: &LocalMeta{WorktreePath: "/Users/jake/worktrees/myproject/feat-auth"},
+			Compute: &ComputeAccessInfo{Type: "local", Path: "/Users/jake/worktrees/myproject/feat-auth"},
 		},
 	}
 
@@ -21,7 +21,7 @@ func TestResolveEnvironmentFromCwd_ExactMatch(t *testing.T) {
 func TestResolveEnvironmentFromCwd_NestedPath(t *testing.T) {
 	envs := map[string]*EnvironmentEntry{
 		"feat-auth": {
-			Local: &LocalMeta{WorktreePath: "/Users/jake/worktrees/myproject/feat-auth"},
+			Compute: &ComputeAccessInfo{Type: "local", Path: "/Users/jake/worktrees/myproject/feat-auth"},
 		},
 	}
 
@@ -37,7 +37,7 @@ func TestResolveEnvironmentFromCwd_NestedPath(t *testing.T) {
 func TestResolveEnvironmentFromCwd_NoMatch(t *testing.T) {
 	envs := map[string]*EnvironmentEntry{
 		"feat-auth": {
-			Local: &LocalMeta{WorktreePath: "/Users/jake/worktrees/myproject/feat-auth"},
+			Compute: &ComputeAccessInfo{Type: "local", Path: "/Users/jake/worktrees/myproject/feat-auth"},
 		},
 	}
 
@@ -50,7 +50,7 @@ func TestResolveEnvironmentFromCwd_NoMatch(t *testing.T) {
 func TestResolveEnvironmentFromCwd_SkipsRemote(t *testing.T) {
 	envs := map[string]*EnvironmentEntry{
 		"remote-env": {
-			Remote: &RemoteMeta{VMId: "vm-123"},
+			Compute: &ComputeAccessInfo{Type: "ssh", Host: "1.2.3.4", User: "deploy"},
 		},
 	}
 
@@ -63,7 +63,7 @@ func TestResolveEnvironmentFromCwd_SkipsRemote(t *testing.T) {
 func TestResolveEnvironmentFromCwd_PrefixNotSubdir(t *testing.T) {
 	envs := map[string]*EnvironmentEntry{
 		"feat": {
-			Local: &LocalMeta{WorktreePath: "/Users/jake/worktrees/myproject/feat"},
+			Compute: &ComputeAccessInfo{Type: "local", Path: "/Users/jake/worktrees/myproject/feat"},
 		},
 	}
 

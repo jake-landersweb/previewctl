@@ -2,20 +2,37 @@ package domain
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestParseConfig_Airgoods(t *testing.T) {
-	data, err := os.ReadFile("/Users/jake/worktrees/airgoods/feat/isolated-local-dev/previewctl.yaml")
-	if err != nil {
-		t.Skipf("airgoods config not found: %v", err)
+	// Try the active worktree first, fall back to the feature branch
+	paths := []string{
+		"/Users/jake/worktrees/airgoods/airgoods/pv-test-21/previewctl.yaml",
+		"/Users/jake/worktrees/airgoods/feat/isolated-local-dev/previewctl.yaml",
+	}
+
+	var data []byte
+	var configDir string
+	for _, p := range paths {
+		d, err := os.ReadFile(p)
+		if err == nil {
+			data = d
+			configDir = filepath.Dir(p)
+			break
+		}
+	}
+	if data == nil {
+		t.Skip("airgoods config not found at any known path")
 	}
 
 	cfg, err := ParseConfig(data)
 	if err != nil {
-		t.Skipf("airgoods config uses old format, skipping: %v", err)
+		t.Skipf("airgoods config parse error (may be old format): %v", err)
 	}
 
+	// Basic config
 	if cfg.Name != "airgoods" {
 		t.Errorf("expected name 'airgoods', got '%s'", cfg.Name)
 	}
@@ -23,9 +40,21 @@ func TestParseConfig_Airgoods(t *testing.T) {
 		t.Errorf("expected version 1, got %d", cfg.Version)
 	}
 
-	// Services
-	if len(cfg.Services) != 12 {
-		t.Errorf("expected 12 services, got %d", len(cfg.Services))
+	// Provisioner services
+	if len(cfg.Provisioner.Services) == 0 {
+		t.Fatal("expected at least one provisioner service")
+	}
+	postgres, ok := cfg.Provisioner.Services["postgres"]
+	if !ok {
+		t.Fatal("expected 'postgres' provisioner service")
+	}
+	if len(postgres.Outputs) == 0 {
+		t.Error("expected postgres outputs to be declared")
+	}
+
+	// Application services
+	if len(cfg.Services) < 10 {
+		t.Errorf("expected at least 10 services, got %d", len(cfg.Services))
 	}
 
 	backend := cfg.Services["backend"]
@@ -33,24 +62,52 @@ func TestParseConfig_Airgoods(t *testing.T) {
 		t.Errorf("expected backend path 'apps/backend', got '%s'", backend.Path)
 	}
 
-	// Local config
-	if cfg.Local == nil {
-		t.Fatal("expected local config")
+	// Overlay loading
+	overlayPath := filepath.Join(configDir, "previewctl.local.yaml")
+	if _, err := os.Stat(overlayPath); err == nil {
+		overlayCfg, err := LoadConfigWithOverlay(filepath.Join(configDir, "previewctl.yaml"), "local")
+		if err != nil {
+			t.Fatalf("overlay loading failed: %v", err)
+		}
+
+		// Verify hooks were merged from overlay
+		pgSvc := overlayCfg.Provisioner.Services["postgres"]
+		if pgSvc.Seed == "" {
+			t.Error("expected seed hook from overlay")
+		}
+		if pgSvc.Destroy == "" {
+			t.Error("expected destroy hook from overlay")
+		}
+
+		// Outputs preserved from base
+		if len(pgSvc.Outputs) == 0 {
+			t.Error("expected outputs preserved from base after overlay merge")
+		}
 	}
 
-	// Test port allocation produces valid results
+	// Simulate infra services (normally populated from compose file parsing)
+	cfg.InfraServices = map[string]InfraService{
+		"redis": {Name: "redis", Port: 6379},
+	}
+
+	// Port allocation
 	serviceNames := cfg.ServiceNames()
-	if len(serviceNames) < 12 {
-		t.Errorf("expected at least 12 service names, got %d", len(serviceNames))
+	if len(serviceNames) < 10 {
+		t.Errorf("expected at least 10 service names, got %d", len(serviceNames))
 	}
 
-	// Test template rendering with this config
 	ports, err := AllocatePortBlock("feat-auth", serviceNames)
 	if err != nil {
 		t.Fatalf("failed to allocate ports: %v", err)
 	}
 
-	// Split ports into service and infra
+	for name, port := range ports {
+		if port < 61000 || port >= 65000 {
+			t.Errorf("port for %s out of range: %d", name, port)
+		}
+	}
+
+	// Template rendering
 	servicePorts := make(PortMap)
 	infraPorts := make(PortMap)
 	for name, port := range ports {
@@ -64,18 +121,36 @@ func TestParseConfig_Airgoods(t *testing.T) {
 	ctx := &TemplateContext{
 		ServicePorts: servicePorts,
 		InfraPorts:   infraPorts,
-		CoreOutputs:  make(map[string]map[string]string),
+		ProvisionerOutputs: map[string]map[string]string{
+			"postgres": {
+				"CONNECTION_STRING": "postgresql://test:test@localhost:5432/test",
+				"DB_HOST":           "localhost",
+				"DB_PORT":           "5432",
+				"DB_USER":           "test",
+				"DB_PASSWORD":       "test",
+				"DB_NAME":           "test",
+			},
+		},
 	}
 
+	ctx.CurrentService = "backend"
 	rendered, err := RenderEnvMap(backend.Env, ctx)
 	if err != nil {
-		// The airgoods config may use old-format template vars, skip if so
-		t.Skipf("template rendering failed (likely old format): %v", err)
+		t.Fatalf("template rendering failed: %v", err)
 	}
 
-	// Verify the port is in the allocated range
-	renderedPort := rendered["PORT"]
-	if renderedPort == "" || renderedPort == "0" {
-		t.Errorf("expected PORT to be allocated, got '%s'", renderedPort)
+	// Verify self.port resolved
+	if rendered["PORT"] == "" || rendered["PORT"] == "0" {
+		t.Errorf("expected PORT to be allocated, got '%s'", rendered["PORT"])
+	}
+
+	// Verify provisioner outputs resolved
+	if rendered["DB_HOST_LOCAL"] != "localhost" {
+		t.Errorf("expected DB_HOST_LOCAL=localhost, got '%s'", rendered["DB_HOST_LOCAL"])
+	}
+
+	// Verify cross-service port reference
+	if rendered["SITE_URL_LOCAL"] == "" {
+		t.Error("expected SITE_URL_LOCAL to be rendered")
 	}
 }

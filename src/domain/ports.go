@@ -23,6 +23,9 @@ type ComputePort interface {
 
 	// IsRunning checks if environment compute resources are active.
 	IsRunning(ctx context.Context, envName string) (bool, error)
+
+	// DetectBranch returns the current git branch for a worktree path.
+	DetectBranch(ctx context.Context, worktreePath string) (string, error)
 }
 
 // NetworkingPort handles port allocation and service URL resolution.
@@ -34,18 +37,6 @@ type NetworkingPort interface {
 
 	// GetServiceURL returns the URL to reach a named service in the environment.
 	GetServiceURL(envName string, service string) (string, error)
-}
-
-// EnvPort generates environment configuration files (.env.local, etc).
-type EnvPort interface {
-	// Generate writes .env.local files for all services in the environment.
-	Generate(ctx context.Context, envName string, workdir string, ports PortMap, coreOutputs map[string]map[string]string) error
-
-	// SymlinkSharedEnvFiles symlinks shared .env files from the main worktree.
-	SymlinkSharedEnvFiles(ctx context.Context, workdir string) error
-
-	// Cleanup removes generated env files.
-	Cleanup(ctx context.Context, workdir string) error
 }
 
 // StatePort persists previewctl state.
@@ -77,11 +68,3 @@ type ProgressReporter interface {
 type NoopReporter struct{}
 
 func (NoopReporter) OnStep(StepEvent) {}
-
-// ProvisionerPort manages VM lifecycle for preview/sandbox modes.
-// Not implemented in POC; exists to validate interface design.
-type ProvisionerPort interface {
-	Provision(ctx context.Context, envName string, spec VMSpec) (*VMInfo, error)
-	Deprovision(ctx context.Context, vmID string) error
-	Status(ctx context.Context, vmID string) (*VMInfo, error)
-}

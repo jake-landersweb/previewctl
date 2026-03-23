@@ -38,8 +38,8 @@ func newCreateCmd() *cobra.Command {
 				styleDetail.Render(entry.Name)))
 
 			KeyValue("Branch", entry.Branch)
-			if entry.Local != nil {
-				KeyValue("Worktree", entry.Local.WorktreePath)
+			if wt := entry.WorktreePath(); wt != "" {
+				KeyValue("Worktree", wt)
 			}
 
 			SectionHeader("Ports")

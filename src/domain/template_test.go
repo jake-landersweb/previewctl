@@ -11,7 +11,7 @@ func testContext() *TemplateContext {
 		InfraPorts: PortMap{
 			"redis": 6421,
 		},
-		CoreOutputs: map[string]map[string]string{
+		ProvisionerOutputs: map[string]map[string]string{
 			"main": {
 				"host":              "localhost",
 				"port":              "5500",
@@ -63,7 +63,7 @@ func TestRenderTemplate_MultiplePorts(t *testing.T) {
 func TestRenderTemplate_CoreOutput(t *testing.T) {
 	ctx := testContext()
 
-	result, err := RenderTemplate("{{core.main.connection_string}}", ctx)
+	result, err := RenderTemplate("{{provisioner.main.connection_string}}", ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,11 +79,11 @@ func TestRenderTemplate_CoreOutputFields(t *testing.T) {
 		tmpl     string
 		expected string
 	}{
-		{"{{core.main.host}}", "localhost"},
-		{"{{core.main.port}}", "5500"},
-		{"{{core.main.user}}", "postgres"},
-		{"{{core.main.password}}", "secret"},
-		{"{{core.main.database}}", "wt_feat_auth"},
+		{"{{provisioner.main.host}}", "localhost"},
+		{"{{provisioner.main.port}}", "5500"},
+		{"{{provisioner.main.user}}", "postgres"},
+		{"{{provisioner.main.password}}", "secret"},
+		{"{{provisioner.main.database}}", "wt_feat_auth"},
 	}
 
 	for _, tt := range tests {
@@ -116,12 +116,12 @@ func TestRenderTemplate_UnknownInfra(t *testing.T) {
 	}
 }
 
-func TestRenderTemplate_UnknownCoreService(t *testing.T) {
+func TestRenderTemplate_UnknownProvisionerService(t *testing.T) {
 	ctx := testContext()
 
-	_, err := RenderTemplate("{{core.unknown.host}}", ctx)
+	_, err := RenderTemplate("{{provisioner.unknown.host}}", ctx)
 	if err == nil {
-		t.Fatal("expected error for unknown core service")
+		t.Fatal("expected error for unknown provisioner service")
 	}
 }
 
@@ -151,7 +151,7 @@ func TestRenderEnvMap(t *testing.T) {
 
 	envMap := map[string]string{
 		"PORT":         "{{services.backend.port}}",
-		"DATABASE_URL": "{{core.main.connection_string}}",
+		"DATABASE_URL": "{{provisioner.main.connection_string}}",
 		"REDIS":        "{{infrastructure.redis.port}}",
 		"STATIC":       "no-template-here",
 	}
@@ -220,11 +220,11 @@ func TestRenderTemplate_SelfInvalidField(t *testing.T) {
 	}
 }
 
-func TestRenderTemplate_UnknownCoreOutput(t *testing.T) {
+func TestRenderTemplate_UnknownProvisionerOutput(t *testing.T) {
 	ctx := testContext()
 
-	_, err := RenderTemplate("{{core.main.nonexistent}}", ctx)
+	_, err := RenderTemplate("{{provisioner.main.nonexistent}}", ctx)
 	if err == nil {
-		t.Fatal("expected error for unknown core output")
+		t.Fatal("expected error for unknown provisioner output")
 	}
 }

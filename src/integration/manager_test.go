@@ -43,28 +43,8 @@ func (s *stubComputePort) IsRunning(_ context.Context, envName string) (bool, er
 	return err == nil, nil
 }
 
-// stubEnvPort writes a marker file with captured outputs.
-type stubEnvPort struct{}
-
-func (s *stubEnvPort) Generate(_ context.Context, envName string, workdir string, ports domain.PortMap, coreOutputs map[string]map[string]string) error {
-	marker := filepath.Join(workdir, ".previewctl-env-generated")
-	content := fmt.Sprintf("env=%s\n", envName)
-	for svc, port := range ports {
-		content += fmt.Sprintf("port.%s=%d\n", svc, port)
-	}
-	for svcName, outputs := range coreOutputs {
-		for key, val := range outputs {
-			content += fmt.Sprintf("core.%s.%s=%s\n", svcName, key, val)
-		}
-	}
-	return os.WriteFile(marker, []byte(content), 0o644)
-}
-
-func (s *stubEnvPort) SymlinkSharedEnvFiles(_ context.Context, _ string) error { return nil }
-
-func (s *stubEnvPort) Cleanup(_ context.Context, workdir string) error {
-	_ = os.Remove(filepath.Join(workdir, ".previewctl-env-generated"))
-	return nil
+func (s *stubComputePort) DetectBranch(_ context.Context, _ string) (string, error) {
+	return "main", nil
 }
 
 // writeSeedScript creates a shell script that clones a database from a template
@@ -185,16 +165,14 @@ func setupManagerWithPostgres(t *testing.T) (*domain.Manager, string, string, in
 	config := &domain.ProjectConfig{
 		Version: 1,
 		Name:    "test-project",
-		Core: domain.CoreConfig{
-			Services: map[string]domain.CoreServiceConfig{
+		Provisioner: domain.ProvisionerConfig{
+			Services: map[string]domain.ProvisionerServiceConfig{
 				"postgres": {
 					Outputs: []string{"CONNECTION_STRING", "DB_HOST", "DB_PORT", "DB_NAME"},
-					Hooks: &domain.CoreServiceHooks{
-						Init:    initScript,
-						Seed:    seedScript,
-						Reset:   seedScript,
-						Destroy: destroyScript,
-					},
+					Init:    initScript,
+					Seed:    seedScript,
+					Reset:   seedScript,
+					Destroy: destroyScript,
 				},
 			},
 		},
@@ -209,7 +187,6 @@ func setupManagerWithPostgres(t *testing.T) (*domain.Manager, string, string, in
 	mgr := domain.NewManager(domain.ManagerDeps{
 		Compute:     &stubComputePort{baseDir: worktreeDir},
 		Networking:  local.NewNetworkingAdapter(config),
-		EnvGen:      &stubEnvPort{},
 		State:       filestate.NewFileStateAdapter(statePath),
 		Config:      config,
 		ProjectRoot: tmpDir,
@@ -261,10 +238,10 @@ func TestIntegration_FullLifecycleWithCoreHooks(t *testing.T) {
 	}
 
 	// Verify core outputs were captured
-	if entry.CoreOutputs == nil {
-		t.Fatal("expected CoreOutputs to be populated")
+	if entry.ProvisionerOutputs == nil {
+		t.Fatal("expected ProvisionerOutputs to be populated")
 	}
-	pgOutputs := entry.CoreOutputs["postgres"]
+	pgOutputs := entry.ProvisionerOutputs["postgres"]
 	if pgOutputs == nil {
 		t.Fatal("expected postgres outputs")
 	}
@@ -292,15 +269,14 @@ func TestIntegration_FullLifecycleWithCoreHooks(t *testing.T) {
 		t.Errorf("expected cloned data, got '%s'", label)
 	}
 
-	// Verify env generation marker has core outputs
-	markerPath := filepath.Join(worktreeDir, "feat-auth", ".previewctl-env-generated")
-	markerData, err := os.ReadFile(markerPath)
+	// Verify .previewctl.json was written
+	manifestPath := filepath.Join(worktreeDir, "feat-auth", ".previewctl.json")
+	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
-		t.Fatalf("reading marker: %v", err)
+		t.Fatalf("reading manifest: %v", err)
 	}
-	markerStr := string(markerData)
-	if !containsStr(markerStr, "core.postgres.DB_NAME=wt_feat_auth") {
-		t.Errorf("expected core outputs in env marker, got:\n%s", markerStr)
+	if len(manifestData) == 0 {
+		t.Error("expected non-empty manifest")
 	}
 
 	// Destroy — should drop the cloned database
@@ -420,20 +396,7 @@ func TestIntegration_Status(t *testing.T) {
 	if detail.Entry.Name != "status-test" {
 		t.Errorf("expected name 'status-test', got '%s'", detail.Entry.Name)
 	}
-	if detail.Entry.CoreOutputs["postgres"]["DB_NAME"] != "wt_status_test" {
-		t.Errorf("expected stored DB_NAME, got '%s'", detail.Entry.CoreOutputs["postgres"]["DB_NAME"])
+	if detail.Entry.ProvisionerOutputs["postgres"]["DB_NAME"] != "wt_status_test" {
+		t.Errorf("expected stored DB_NAME, got '%s'", detail.Entry.ProvisionerOutputs["postgres"]["DB_NAME"])
 	}
-}
-
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && findStr(s, substr)
-}
-
-func findStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

@@ -32,10 +32,14 @@ func Execute() {
 
 	rootCmd.AddCommand(
 		newCreateCmd(),
+		newAttachCmd(),
 		newDeleteCmd(),
 		newListCmd(),
 		newStatusCmd(),
-		newCoreCmd(),
+		newProvisionCmd(),
+		newRunCmd(),
+		newStepsCmd(),
+		newProvisionerCmd(),
 		newVetCmd(),
 		newCleanCmd(),
 		newVersionCmd(),
@@ -47,9 +51,14 @@ func Execute() {
 	}
 }
 
-// buildManager loads config, wires adapters, and creates a Manager.
+// buildManager loads config with "local" mode, wires adapters, and creates a Manager.
 func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.ProjectConfig, error) {
-	cfg, projectRoot, err := loadConfig()
+	return buildManagerWithMode(progress, "local")
+}
+
+// buildManagerWithMode loads config with the specified mode overlay, wires adapters, and creates a Manager.
+func buildManagerWithMode(progress domain.ProgressReporter, mode string) (*domain.Manager, *domain.ProjectConfig, error) {
+	cfg, projectRoot, err := loadConfigWithMode(mode)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -67,7 +76,6 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 	mgr := domain.NewManager(domain.ManagerDeps{
 		Compute:     local.NewComputeAdapter(cfg, composeFile),
 		Networking:  local.NewNetworkingAdapter(cfg),
-		EnvGen:      local.NewEnvGenAdapter(cfg),
 		State:       filestate.NewFileStateAdapter(statePath),
 		Progress:    progress,
 		Config:      cfg,
@@ -77,9 +85,14 @@ func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.Pr
 	return mgr, cfg, nil
 }
 
-// loadConfig searches for previewctl.yaml starting from cwd and walking up.
-// Returns the config and the directory where it was found (project root).
+// loadConfig searches for previewctl.yaml with "local" mode overlay.
 func loadConfig() (*domain.ProjectConfig, string, error) {
+	return loadConfigWithMode("local")
+}
+
+// loadConfigWithMode searches for previewctl.yaml starting from cwd and walking up,
+// loading the specified mode overlay (e.g., previewctl.remote.yaml).
+func loadConfigWithMode(mode string) (*domain.ProjectConfig, string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, "", fmt.Errorf("getting cwd: %w", err)
@@ -89,7 +102,7 @@ func loadConfig() (*domain.ProjectConfig, string, error) {
 	for {
 		path := filepath.Join(dir, configFileName)
 		if _, err := os.Stat(path); err == nil {
-			cfg, err := domain.LoadConfigWithOverlay(path, "local")
+			cfg, err := domain.LoadConfigWithOverlay(path, mode)
 			if err != nil {
 				return nil, "", err
 			}

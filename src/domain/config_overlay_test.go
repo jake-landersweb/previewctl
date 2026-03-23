@@ -12,7 +12,7 @@ func TestLoadConfigWithOverlay_MergesHooksIntoBase(t *testing.T) {
 	base := `
 version: 1
 name: myproject
-core:
+provisioner:
   services:
     postgres:
       outputs: [CONNECTION_STRING, DB_HOST]
@@ -21,12 +21,11 @@ services:
     path: apps/backend
 `
 	overlay := `
-core:
+provisioner:
   services:
     postgres:
-      hooks:
-        init: ./scripts/init.sh
-        seed: ./scripts/seed.sh
+      init: ./scripts/init.sh
+      seed: ./scripts/seed.sh
 infrastructure:
   compose_file: compose.yaml
 `
@@ -38,7 +37,7 @@ infrastructure:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	svc := cfg.Core.Services["postgres"]
+	svc := cfg.Provisioner.Services["postgres"]
 
 	// Base outputs preserved
 	if len(svc.Outputs) != 2 {
@@ -46,14 +45,11 @@ infrastructure:
 	}
 
 	// Overlay hooks merged in
-	if svc.Hooks == nil {
-		t.Fatal("expected hooks from overlay")
+	if svc.Init != "./scripts/init.sh" {
+		t.Errorf("expected init hook from overlay, got '%s'", svc.Init)
 	}
-	if svc.Hooks.Init != "./scripts/init.sh" {
-		t.Errorf("expected init hook from overlay, got '%s'", svc.Hooks.Init)
-	}
-	if svc.Hooks.Seed != "./scripts/seed.sh" {
-		t.Errorf("expected seed hook from overlay, got '%s'", svc.Hooks.Seed)
+	if svc.Seed != "./scripts/seed.sh" {
+		t.Errorf("expected seed hook from overlay, got '%s'", svc.Seed)
 	}
 
 	// Overlay infrastructure merged
@@ -73,7 +69,7 @@ func TestLoadConfigWithOverlay_NoOverlayFile(t *testing.T) {
 	base := `
 version: 1
 name: myproject
-core:
+provisioner:
   services:
     postgres:
       outputs: [CONNECTION_STRING]
@@ -87,7 +83,7 @@ services:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(cfg.Core.Services["postgres"].Outputs) != 1 {
+	if len(cfg.Provisioner.Services["postgres"].Outputs) != 1 {
 		t.Error("expected base config unchanged when no overlay exists")
 	}
 }
@@ -98,7 +94,7 @@ func TestLoadConfigWithOverlay_OverlayOutputsReplace(t *testing.T) {
 	base := `
 version: 1
 name: myproject
-core:
+provisioner:
   services:
     postgres:
       outputs: [A, B]
@@ -107,7 +103,7 @@ services:
     path: apps/backend
 `
 	overlay := `
-core:
+provisioner:
   services:
     postgres:
       outputs: [X, Y, Z]
@@ -120,7 +116,7 @@ core:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	outputs := cfg.Core.Services["postgres"].Outputs
+	outputs := cfg.Provisioner.Services["postgres"].Outputs
 	if len(outputs) != 3 || outputs[0] != "X" {
 		t.Errorf("expected overlay outputs to replace base, got %v", outputs)
 	}
@@ -132,7 +128,7 @@ func TestLoadConfigWithOverlay_OverlayAddsNewService(t *testing.T) {
 	base := `
 version: 1
 name: myproject
-core:
+provisioner:
   services:
     postgres:
       outputs: [DSN]

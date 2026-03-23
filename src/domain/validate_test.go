@@ -9,8 +9,8 @@ func TestValidateConfig_Valid(t *testing.T) {
 	cfg := &ProjectConfig{
 		Version: 1,
 		Name:    "myproject",
-		Core: CoreConfig{
-			Services: map[string]CoreServiceConfig{
+		Provisioner: ProvisionerConfig{
+			Services: map[string]ProvisionerServiceConfig{
 				"main": {Outputs: []string{"connection_string", "host", "port", "user", "password", "database"}},
 			},
 		},
@@ -20,7 +20,7 @@ func TestValidateConfig_Valid(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"backend": {Path: "apps/backend", DependsOn: []string{"redis"}, Env: map[string]string{
 				"PORT":         "{{services.backend.port}}",
-				"DATABASE_URL": "{{core.main.connection_string}}",
+				"DATABASE_URL": "{{provisioner.main.connection_string}}",
 				"REDIS":        "redis://localhost:{{infrastructure.redis.port}}",
 			}},
 			"web": {Path: "apps/web", DependsOn: []string{"backend"}, Env: map[string]string{
@@ -117,8 +117,8 @@ func TestValidateConfig_InvalidTemplateVar(t *testing.T) {
 		{"unknown namespace", "{{foo.bar}}", "unknown template namespace"},
 		{"unknown service", "{{services.nonexistent.port}}", "unknown service"},
 		{"unknown infra", "{{infrastructure.nonexistent.port}}", "unknown infrastructure"},
-		{"unknown core service", "{{core.nope.host}}", "unknown core service"},
-		{"unknown core output", "{{core.main.nope}}", "unknown output"},
+		{"unknown provisioner service", "{{provisioner.nope.host}}", "unknown provisioner service"},
+		{"unknown provisioner output", "{{provisioner.main.nope}}", "unknown output"},
 		{"malformed services", "{{services.backend}}", "expected {{services.<name>.port}}"},
 	}
 
@@ -127,8 +127,8 @@ func TestValidateConfig_InvalidTemplateVar(t *testing.T) {
 			cfg := &ProjectConfig{
 				Version: 1,
 				Name:    "test",
-				Core: CoreConfig{
-					Services: map[string]CoreServiceConfig{
+				Provisioner: ProvisionerConfig{
+					Services: map[string]ProvisionerServiceConfig{
 						"main": {Outputs: []string{"host", "port", "connection_string"}},
 					},
 				},
@@ -175,9 +175,6 @@ func TestValidateConfigWithFS_MissingPaths(t *testing.T) {
 		Services: map[string]ServiceConfig{
 			"backend": {Path: "apps/backend"},
 		},
-		Local: &LocalConfig{
-			Worktree: WorktreeConfig{},
-		},
 	}
 
 	// Nothing exists
@@ -217,9 +214,6 @@ func TestValidateConfigWithFS_AllExists(t *testing.T) {
 		Infrastructure: &InfrastructureConfig{ComposeFile: "compose.worktree.yaml"},
 		Services: map[string]ServiceConfig{
 			"backend": {Path: "apps/backend"},
-		},
-		Local: &LocalConfig{
-			Worktree: WorktreeConfig{},
 		},
 	}
 

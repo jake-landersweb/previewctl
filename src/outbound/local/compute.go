@@ -21,10 +21,11 @@ type ComputeAdapter struct {
 
 // NewComputeAdapter creates a new local compute adapter.
 func NewComputeAdapter(config *domain.ProjectConfig, composeFile string) *ComputeAdapter {
+	home, _ := os.UserHomeDir()
 	return &ComputeAdapter{
 		config:       config,
 		composeFile:  composeFile,
-		worktreeBase: domain.WorktreeBasePath(),
+		worktreeBase: filepath.Join(home, ".previewctl", "worktrees"),
 	}
 }
 
@@ -120,6 +121,19 @@ func (a *ComputeAdapter) IsRunning(ctx context.Context, envName string) (bool, e
 
 	// If output is non-empty, containers are running
 	return len(strings.TrimSpace(string(out))) > 0, nil
+}
+
+func (a *ComputeAdapter) DetectBranch(ctx context.Context, worktreePath string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("detecting branch: %w", err)
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "HEAD" {
+		return "", fmt.Errorf("worktree at %s has a detached HEAD", worktreePath)
+	}
+	return branch, nil
 }
 
 // composeEnv returns os.Environ() with COMPOSE_PROJECT_NAME set for the given environment.

@@ -38,17 +38,18 @@ func TestFileStateAdapter_RoundTrip(t *testing.T) {
 
 	now := time.Now()
 	entry := &domain.EnvironmentEntry{
-		Name:        "feat-auth",
-		Mode:        domain.ModeLocal,
-		Branch:      "feat-auth",
-		Status:      domain.StatusRunning,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Ports:       domain.PortMap{"backend": 8042, "web": 3042},
-		CoreOutputs: make(map[string]map[string]string),
-		Local: &domain.LocalMeta{
-			WorktreePath:       "/Users/jake/worktrees/myproject/feat-auth",
-			ComposeProjectName: "myproject-feat-auth",
+		Name:               "feat-auth",
+		Mode:               domain.ModeLocal,
+		Branch:             "feat-auth",
+		Status:             domain.StatusRunning,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		Ports:              domain.PortMap{"backend": 8042, "web": 3042},
+		ProvisionerOutputs: make(map[string]map[string]string),
+		Compute: &domain.ComputeAccessInfo{
+			Type:            "local",
+			Path:            "/Users/jake/worktrees/myproject/feat-auth",
+			ManagedWorktree: true,
 		},
 	}
 
@@ -69,8 +70,8 @@ func TestFileStateAdapter_RoundTrip(t *testing.T) {
 	if loaded.Ports["backend"] != 8042 {
 		t.Errorf("expected backend port 8042, got %d", loaded.Ports["backend"])
 	}
-	if loaded.Local.WorktreePath != "/Users/jake/worktrees/myproject/feat-auth" {
-		t.Errorf("unexpected worktree path: %s", loaded.Local.WorktreePath)
+	if loaded.WorktreePath() != "/Users/jake/worktrees/myproject/feat-auth" {
+		t.Errorf("unexpected worktree path: %s", loaded.WorktreePath())
 	}
 }
 

@@ -58,11 +58,12 @@ previewctl vet                         Validate previewctl.yaml
 
 Create a `previewctl.yaml` in your project root:
 
+**Base config** (`previewctl.yaml`):
 ```yaml
 version: 1
 name: myproject
 
-core:
+provisioner:
   services:
     postgres:
       outputs: [CONNECTION_STRING, DB_HOST, DB_PORT]
@@ -73,72 +74,77 @@ infrastructure:
 services:
   backend:
     path: apps/backend
-    command: pnpm dev
     depends_on: [redis]
     env:
-      PORT: "{{services.backend.port}}"
-      DATABASE_URL: "{{core.postgres.CONNECTION_STRING}}"
+      PORT: "{{self.port}}"
+      DATABASE_URL: "{{provisioner.postgres.CONNECTION_STRING}}"
       REDIS_PORT: "{{infrastructure.redis.port}}"
 
   web:
     path: apps/web
     depends_on: [backend]
     env:
-      NEXT_PUBLIC_API_URL: "http://localhost:{{services.backend.port}}"
+      PORT: "{{self.port}}"
+      API_URL: "http://localhost:{{services.backend.port}}"
+```
 
-local:
-  worktree:
-    symlink_patterns: [".env", ".env.*"]
-
-hooks:
-  create:
-    after:
-      - run: npm run migrate
-        continue_on_error: true
+**Local overlay** (`previewctl.local.yaml`):
+```yaml
+provisioner:
+  before: ./scripts/ensure-core-compose.sh
+  services:
+    postgres:
+      init: ./scripts/init-db.sh
+      seed: ./scripts/seed-env.sh
+      destroy: ./scripts/destroy-env-db.sh
+  after: pnpm install
 ```
 
 ### Template variables
 
-Use these in service `env` values:
-
 | Variable | Description |
 |---|---|
+| `{{self.port}}` | Allocated port for the current service |
 | `{{services.<name>.port}}` | Allocated port for an application service |
 | `{{infrastructure.<name>.port}}` | Allocated port for an infrastructure service |
-| `{{core.<service>.<OUTPUT>}}` | Output from a core service hook (e.g., `{{core.postgres.CONNECTION_STRING}}`) |
+| `{{provisioner.<service>.<OUTPUT>}}` | Output from a provisioner service hook |
 
-### Core services
+### Provisioner services
 
-Core services are long-lived services (databases, caches, etc.) managed via lifecycle hooks. Declare outputs in `previewctl.yaml`, define hooks in overlay files (`previewctl.local.yaml`, `previewctl.remote.yaml`).
+Provisioner services manage external resources (databases, branches, etc.) via lifecycle hooks. Declare outputs in the base config, define hooks in overlay files.
 
 Hooks write `KEY=VALUE` pairs to stdout. Outputs are validated against the declared list and made available as template variables.
 
 | Hook | When | Example |
 |------|------|---------|
-| `init` | `previewctl core <name> init` | Create template DB |
-| `seed` | During `previewctl create` | Clone from template |
-| `reset` | `previewctl core <name> reset [env]` | Drop + re-clone |
+| `init` | `previewctl provisioner <name> init` | Create template DB |
+| `seed` | During `previewctl create` / `attach` | Clone from template |
+| `reset` | `previewctl provisioner <name> reset [env]` | Drop + re-clone |
 | `destroy` | During `previewctl delete` | Drop database |
 
-### Hooks
+### Config overlays
 
-Hooks can be attached to lifecycle steps: `allocate_ports`, `create_compute`, `symlink_env`, `generate_env`, `start_infra`, `save_state`, and top-level `create`/`delete`.
+Base config (`previewctl.yaml`) declares WHAT — service outputs, app services, env templates.
+Overlay files (`previewctl.local.yaml`, `previewctl.remote.yaml`) declare HOW — hooks, compose files, before/after scripts.
 
-Scripts receive context via environment variables: `PREVIEWCTL_ENV_NAME`, `PREVIEWCTL_BRANCH`, `PREVIEWCTL_WORKTREE_PATH`, `PREVIEWCTL_STEP`, `PREVIEWCTL_PHASE`, plus port and core output info.
+The tool loads `previewctl.yaml` + `previewctl.{mode}.yaml` and deep-merges them.
 
 ## How it works
 
 When you run `previewctl create`, the tool:
 
-1. Allocates deterministic ports (FNV-1a hash of environment name)
+1. Runs `provisioner.before` hook (if defined)
 2. Creates a git worktree for code isolation
-3. Clones databases from templates
-4. Symlinks shared env files from the main worktree
-5. Generates `.env.local` files with resolved template variables
-6. Starts infrastructure containers via Docker Compose
-7. Persists state to `~/.cache/previewctl/<project>/state.json`
+3. Allocates deterministic ports (FNV-1a hash, range 61000-65000)
+4. Runs provisioner service seed hooks (e.g., clone database from template)
+5. Runs `provisioner.after` hook (if defined)
+6. Generates `.env.local` files with resolved template variables
+7. Starts infrastructure containers via Docker Compose
+8. Persists state to `~/.cache/previewctl/<project>/state.json`
 
-`previewctl delete` reverses all of the above, cleaning up every resource.
+`previewctl attach` does the same but uses an existing worktree (e.g., one created by Claude Code).
+
+`previewctl delete` reverses all of the above, cleaning up every resource (but leaving external worktrees intact).
 
 ## License
 
