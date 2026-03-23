@@ -47,8 +47,26 @@ type ComputeAccessInfo struct {
 }
 
 // ComposeProjectName returns the compose project name for this environment.
+// Sanitizes to match Docker Compose requirements: lowercase alphanumeric, hyphens, underscores.
 func ComposeProjectName(projectName, envName string) string {
-	return projectName + "-" + envName
+	return sanitizeComposeName(projectName + "-" + envName)
+}
+
+// sanitizeComposeName replaces characters not allowed in Docker Compose project names.
+func sanitizeComposeName(name string) string {
+	var b []byte
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+			b = append(b, c)
+		case c >= 'A' && c <= 'Z':
+			b = append(b, c+32) // lowercase
+		default:
+			b = append(b, '_')
+		}
+	}
+	return string(b)
 }
 
 // StepRecordStatus represents the persisted outcome of a step.
