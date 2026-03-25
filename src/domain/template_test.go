@@ -228,3 +228,36 @@ func TestRenderTemplate_UnknownProvisionerOutput(t *testing.T) {
 		t.Fatal("expected error for unknown provisioner output")
 	}
 }
+
+func TestRenderTemplate_EnvName(t *testing.T) {
+	ctx := testContext()
+	ctx.EnvName = "pr-2901"
+
+	result, err := RenderTemplate("https://{{env.name}}--backend.preview.airgoods.com/api", ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "https://pr-2901--backend.preview.airgoods.com/api" {
+		t.Errorf("expected 'https://pr-2901--backend.preview.airgoods.com/api', got '%s'", result)
+	}
+}
+
+func TestRenderTemplate_EnvNameNotSet(t *testing.T) {
+	ctx := testContext()
+	// EnvName not set
+
+	_, err := RenderTemplate("{{env.name}}", ctx)
+	if err == nil {
+		t.Fatal("expected error for env.name without EnvName set")
+	}
+}
+
+func TestRenderTemplate_EnvNameInvalidField(t *testing.T) {
+	ctx := testContext()
+	ctx.EnvName = "pr-2901"
+
+	_, err := RenderTemplate("{{env.branch}}", ctx)
+	if err == nil {
+		t.Fatal("expected error for env.branch (only env.name is valid)")
+	}
+}

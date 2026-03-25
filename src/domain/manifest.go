@@ -56,6 +56,7 @@ func BuildManifest(
 		ServicePorts:       servicePorts,
 		InfraPorts:         infraPorts,
 		ProvisionerOutputs: provisionerOutputs,
+		EnvName:            envName,
 	}
 
 	// Resolve env vars for each service

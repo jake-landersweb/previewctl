@@ -69,14 +69,28 @@ func buildManagerWithMode(progress domain.ProgressReporter, mode string) (*domai
 		composeFile = filepath.Join(projectRoot, cfg.Infrastructure.ComposeFile)
 	}
 
-	// Build state path
-	home, _ := os.UserHomeDir()
-	statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
+	// Build state adapter based on mode
+	var stateAdapter domain.StatePort
+	if mode == "remote" {
+		dsn := os.Getenv("PREVIEWCTL_STATE_DSN")
+		if dsn == "" {
+			return nil, nil, fmt.Errorf("PREVIEWCTL_STATE_DSN is required for remote mode")
+		}
+		pgAdapter, err := filestate.NewPostgresStateAdapter(dsn, cfg.Name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("connecting to state database: %w", err)
+		}
+		stateAdapter = pgAdapter
+	} else {
+		home, _ := os.UserHomeDir()
+		statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
+		stateAdapter = filestate.NewFileStateAdapter(statePath)
+	}
 
 	mgr := domain.NewManager(domain.ManagerDeps{
 		Compute:     local.NewComputeAdapter(cfg, composeFile),
 		Networking:  local.NewNetworkingAdapter(cfg),
-		State:       filestate.NewFileStateAdapter(statePath),
+		State:       stateAdapter,
 		Progress:    progress,
 		Config:      cfg,
 		ProjectRoot: projectRoot,

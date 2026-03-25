@@ -14,6 +14,7 @@ type TemplateContext struct {
 	InfraPorts         PortMap
 	ProvisionerOutputs map[string]map[string]string
 	CurrentService     string // set per-service during rendering, enables {{self.port}}
+	EnvName            string // environment name, enables {{env.name}}
 }
 
 // RenderTemplate replaces {{var}} placeholders in a string with values from the context.
@@ -21,6 +22,7 @@ type TemplateContext struct {
 //   - {{services.<name>.port}} — allocated port for an application service
 //   - {{infrastructure.<name>.port}} — allocated port for an infrastructure service
 //   - {{provisioner.<service>.<OUTPUT>}} — output value from a provisioner service
+//   - {{env.name}} — the current environment name
 func RenderTemplate(tmpl string, ctx *TemplateContext) (string, error) {
 	var renderErr error
 
@@ -98,6 +100,15 @@ func resolveVar(parts []string, ctx *TemplateContext) (string, error) {
 			return "", fmt.Errorf("unknown infrastructure service '%s'", parts[1])
 		}
 		return fmt.Sprintf("%d", port), nil
+
+	case "env":
+		if len(parts) != 2 || parts[1] != "name" {
+			return "", fmt.Errorf("expected env.name, got %s", strings.Join(parts, "."))
+		}
+		if ctx.EnvName == "" {
+			return "", fmt.Errorf("env.name not available in this context")
+		}
+		return ctx.EnvName, nil
 
 	case "provisioner":
 		return resolveProvisionerVar(parts[1:], ctx)

@@ -162,7 +162,6 @@ func TestManager_Init_CallOrder(t *testing.T) {
 	expectedOps := map[string]bool{
 		"compute.Create":           false,
 		"networking.AllocatePorts": false,
-		"compute.Start":            false,
 		"state.SetEnvironment":     false,
 	}
 	for _, call := range tracker.calls {
@@ -621,17 +620,6 @@ func TestManager_Init_CallsProvisionThenRunner(t *testing.T) {
 		t.Errorf("expected status 'running', got '%s'", entry.Status)
 	}
 
-	// Verify compute.Start was called (runner ran)
-	hasStart := false
-	for _, call := range tracker.calls {
-		if call == "compute.Start" {
-			hasStart = true
-		}
-	}
-	if !hasStart {
-		t.Error("expected compute.Start to be called (runner phase)")
-	}
-
 	// State should show running
 	saved := statePort.environments["feat-full"]
 	if saved == nil {
@@ -662,17 +650,6 @@ func TestManager_Run_Stateless(t *testing.T) {
 	err = mgr.Run(ctx, manifestPath, "")
 	if err != nil {
 		t.Fatalf("Run error: %v", err)
-	}
-
-	// Verify compute.Start was called (runner ran)
-	hasStart := false
-	for _, call := range tracker.calls {
-		if call == "compute.Start" {
-			hasStart = true
-		}
-	}
-	if !hasStart {
-		t.Error("expected compute.Start to be called")
 	}
 
 	// State should still show "provisioned" — Run is stateless

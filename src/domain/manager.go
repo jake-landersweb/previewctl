@@ -663,6 +663,19 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 // runRunner executes the runner phase with optional checkpointing.
 // When entry is nil, no checkpointing occurs (stateless mode).
 func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca ComputeAccess, manifest *Manifest, managedWorktree, saveState bool, entry *EnvironmentEntry) (*EnvironmentEntry, error) {
+	// 0. Sync code on re-runs (pull latest from remote)
+	// Only runs when the runner has already completed before (re-run, not first create).
+	// Runs directly (not via step()) so it always executes — the point is to pull fresh code.
+	if entry != nil && entry.StepCompleted("runner_before") {
+		m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepStarted, Message: fmt.Sprintf("Syncing code to origin/%s...", branch)})
+		syncCmd := fmt.Sprintf("git fetch origin && git reset --hard origin/%s", branch)
+		if _, err := ca.Exec(ctx, syncCmd, nil); err != nil {
+			m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepFailed, Message: err.Error()})
+			return nil, fmt.Errorf("syncing code: %w", err)
+		}
+		m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepCompleted, Message: "Code synced to latest"})
+	}
+
 	// 1. runner.before hook
 	if m.config.Runner != nil && m.config.Runner.Before != "" {
 		beforeMsg := fmt.Sprintf("Ran runner.before (%s)", m.config.Runner.Before)
@@ -708,14 +721,33 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 		StartMsg:    "Starting infrastructure containers...",
 		CompleteMsg: msg("Infrastructure containers started"),
 		Fn: func() error {
-			return m.compute.Start(ctx, envName, manifest.Ports)
+			composeFile := ""
+			if manifest.Infrastructure != nil {
+				composeFile = manifest.Infrastructure.ComposeFile
+			}
+			if composeFile == "" {
+				return nil
+			}
+			env := BuildComposeEnv(m.config.Name, envName, manifest.Ports)
+			cmd := fmt.Sprintf("docker compose -f %s up -d", composeFile)
+			_, err := ca.Exec(ctx, cmd, env)
+			return err
 		},
 		Verify: func(ctx context.Context) error {
-			running, err := m.compute.IsRunning(ctx, envName)
+			composeFile := ""
+			if manifest.Infrastructure != nil {
+				composeFile = manifest.Infrastructure.ComposeFile
+			}
+			if composeFile == "" {
+				return nil
+			}
+			projectName := ComposeProjectName(m.config.Name, envName)
+			cmd := fmt.Sprintf("docker compose -f %s -p %s ps --format json", composeFile, projectName)
+			out, err := ca.Exec(ctx, cmd, nil)
 			if err != nil {
 				return err
 			}
-			if !running {
+			if len(strings.TrimSpace(out)) == 0 {
 				return fmt.Errorf("infrastructure not running")
 			}
 			return nil
