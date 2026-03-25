@@ -3,27 +3,33 @@ package state
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/pressly/goose/v3"
 
 	"github.com/jake-landersweb/previewctl/src/domain"
 )
 
+//go:embed migrations/*.sql
+var migrations embed.FS
+
 // PostgresStateAdapter persists state to a PostgreSQL database.
 // Each environment is stored as a JSONB row, scoped by project name.
+// Migrations are applied automatically on construction via goose.
 type PostgresStateAdapter struct {
 	db      *sql.DB
 	project string
-	once    sync.Once
 }
 
 // NewPostgresStateAdapter creates a new Postgres-backed state adapter.
 // The dsn should be a valid PostgreSQL connection string.
 // The project name scopes state so multiple projects can share one database.
+// Migrations are applied automatically on creation — the caller should provide
+// an isolated database to avoid migration table conflicts.
 func NewPostgresStateAdapter(dsn, project string) (*PostgresStateAdapter, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -33,36 +39,27 @@ func NewPostgresStateAdapter(dsn, project string) (*PostgresStateAdapter, error)
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
+	if err := runMigrations(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("running migrations: %w", err)
+	}
+
 	return &PostgresStateAdapter{db: db, project: project}, nil
 }
 
-// ensureTable creates the environments table if it does not exist.
-func (a *PostgresStateAdapter) ensureTable(ctx context.Context) error {
-	var err error
-	a.once.Do(func() {
-		_, err = a.db.ExecContext(ctx, `
-			CREATE TABLE IF NOT EXISTS environments (
-				project    TEXT NOT NULL,
-				name       TEXT NOT NULL,
-				data       JSONB NOT NULL,
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-				PRIMARY KEY (project, name)
-			)
-		`)
-	})
-	if err != nil {
-		// Reset once so it retries on next call
-		a.once = sync.Once{}
-		return fmt.Errorf("creating environments table: %w", err)
+// runMigrations applies all pending goose migrations from the embedded SQL files.
+func runMigrations(db *sql.DB) error {
+	goose.SetBaseFS(migrations)
+	if err := goose.SetDialect("postgres"); err != nil {
+		return fmt.Errorf("setting goose dialect: %w", err)
+	}
+	if err := goose.Up(db, "migrations"); err != nil {
+		return fmt.Errorf("applying migrations: %w", err)
 	}
 	return nil
 }
 
 func (a *PostgresStateAdapter) Load(ctx context.Context) (*domain.State, error) {
-	if err := a.ensureTable(ctx); err != nil {
-		return nil, err
-	}
-
 	rows, err := a.db.QueryContext(ctx,
 		`SELECT name, data FROM environments WHERE project = $1`, a.project)
 	if err != nil {
@@ -91,10 +88,6 @@ func (a *PostgresStateAdapter) Load(ctx context.Context) (*domain.State, error) 
 }
 
 func (a *PostgresStateAdapter) Save(ctx context.Context, state *domain.State) error {
-	if err := a.ensureTable(ctx); err != nil {
-		return err
-	}
-
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
@@ -122,10 +115,6 @@ func (a *PostgresStateAdapter) Save(ctx context.Context, state *domain.State) er
 }
 
 func (a *PostgresStateAdapter) GetEnvironment(ctx context.Context, name string) (*domain.EnvironmentEntry, error) {
-	if err := a.ensureTable(ctx); err != nil {
-		return nil, err
-	}
-
 	var data []byte
 	err := a.db.QueryRowContext(ctx,
 		`SELECT data FROM environments WHERE project = $1 AND name = $2`,
@@ -145,10 +134,6 @@ func (a *PostgresStateAdapter) GetEnvironment(ctx context.Context, name string) 
 }
 
 func (a *PostgresStateAdapter) SetEnvironment(ctx context.Context, name string, entry *domain.EnvironmentEntry) error {
-	if err := a.ensureTable(ctx); err != nil {
-		return err
-	}
-
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshaling environment '%s': %w", name, err)
@@ -167,10 +152,6 @@ func (a *PostgresStateAdapter) SetEnvironment(ctx context.Context, name string, 
 }
 
 func (a *PostgresStateAdapter) RemoveEnvironment(ctx context.Context, name string) error {
-	if err := a.ensureTable(ctx); err != nil {
-		return err
-	}
-
 	_, err := a.db.ExecContext(ctx,
 		`DELETE FROM environments WHERE project = $1 AND name = $2`,
 		a.project, name)
