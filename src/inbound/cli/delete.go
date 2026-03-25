@@ -9,15 +9,13 @@ import (
 )
 
 func newDeleteCmd() *cobra.Command {
-	var mode string
-
 	cmd := &cobra.Command{
 		Use:   "delete [name]",
 		Short: "Delete an environment",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			progress := NewCLIProgressReporter()
-			mgr, cfg, err := buildManagerWithMode(progress, mode)
+			mgr, cfg, err := buildManager(progress)
 			if err != nil {
 				return err
 			}
@@ -43,8 +41,6 @@ func newDeleteCmd() *cobra.Command {
 			return nil
 		},
 	}
-
-	cmd.Flags().StringVarP(&mode, "mode", "m", "local", "Deployment mode (local, remote)")
 
 	return cmd
 }

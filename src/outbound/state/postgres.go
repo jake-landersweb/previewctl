@@ -19,7 +19,7 @@ var migrations embed.FS
 
 // PostgresStateAdapter persists state to a PostgreSQL database.
 // Each environment is stored as a JSONB row, scoped by project name.
-// Migrations are applied automatically on construction via goose.
+// Run RunMigrations before first use to ensure the schema is up to date.
 type PostgresStateAdapter struct {
 	db      *sql.DB
 	project string
@@ -28,8 +28,8 @@ type PostgresStateAdapter struct {
 // NewPostgresStateAdapter creates a new Postgres-backed state adapter.
 // The dsn should be a valid PostgreSQL connection string.
 // The project name scopes state so multiple projects can share one database.
-// Migrations are applied automatically on creation — the caller should provide
-// an isolated database to avoid migration table conflicts.
+// The caller should run RunMigrations separately (via `previewctl migrate`)
+// before using the adapter for the first time.
 func NewPostgresStateAdapter(dsn, project string) (*PostgresStateAdapter, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -39,16 +39,18 @@ func NewPostgresStateAdapter(dsn, project string) (*PostgresStateAdapter, error)
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	if err := runMigrations(db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("running migrations: %w", err)
-	}
-
 	return &PostgresStateAdapter{db: db, project: project}, nil
 }
 
-// runMigrations applies all pending goose migrations from the embedded SQL files.
-func runMigrations(db *sql.DB) error {
+// RunMigrations applies all pending goose migrations from the embedded SQL files.
+// Should be called explicitly via `previewctl migrate` before first use.
+func RunMigrations(dsn string) error {
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return fmt.Errorf("opening postgres connection: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
 	goose.SetBaseFS(migrations)
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("setting goose dialect: %w", err)

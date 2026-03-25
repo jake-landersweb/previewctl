@@ -8,10 +8,7 @@ import (
 )
 
 func newCreateCmd() *cobra.Command {
-	var (
-		branch string
-		mode   string
-	)
+	var branch string
 
 	cmd := &cobra.Command{
 		Use:   "create <name>",
@@ -24,7 +21,7 @@ func newCreateCmd() *cobra.Command {
 			}
 
 			progress := NewCLIProgressReporter()
-			mgr, _, err := buildManagerWithMode(progress, mode)
+			mgr, _, err := buildManager(progress)
 			if err != nil {
 				return err
 			}
@@ -62,7 +59,6 @@ func newCreateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&branch, "branch", "b", "", "Git branch name (defaults to environment name)")
-	cmd.Flags().StringVarP(&mode, "mode", "m", "local", "Deployment mode (local, remote)")
 
 	return cmd
 }

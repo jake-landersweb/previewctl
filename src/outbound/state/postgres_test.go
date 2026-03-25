@@ -18,6 +18,10 @@ func setupPostgresAdapter(t *testing.T) *PostgresStateAdapter {
 	pg := testutil.StartPostgres(ctx, t)
 	dsn := pg.ConnectionString(testutil.TestDBName)
 
+	if err := RunMigrations(dsn); err != nil {
+		t.Fatalf("running migrations: %v", err)
+	}
+
 	adapter, err := NewPostgresStateAdapter(dsn, "testproject")
 	if err != nil {
 		t.Fatalf("creating adapter: %v", err)
@@ -169,6 +173,10 @@ func TestPostgresStateAdapter_ProjectScoping(t *testing.T) {
 	ctx := context.Background()
 	pg := testutil.StartPostgres(ctx, t)
 	dsn := pg.ConnectionString(testutil.TestDBName)
+
+	if err := RunMigrations(dsn); err != nil {
+		t.Fatalf("running migrations: %v", err)
+	}
 
 	adapterA, err := NewPostgresStateAdapter(dsn, "project-a")
 	if err != nil {

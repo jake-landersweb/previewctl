@@ -13,7 +13,6 @@ func newRunCmd() *cobra.Command {
 		manifestPath string
 		fromStep     string
 		noCache      bool
-		mode         string
 	)
 
 	cmd := &cobra.Command{
@@ -45,7 +44,7 @@ hook configuration from previewctl.yaml in the current repo.`,
 			}
 
 			progress := NewCLIProgressReporter()
-			mgr, _, err := buildManagerWithMode(progress, mode)
+			mgr, _, err := buildManager(progress)
 			if err != nil {
 				return err
 			}
@@ -68,7 +67,6 @@ hook configuration from previewctl.yaml in the current repo.`,
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to .previewctl.json (defaults to ./.previewctl.json)")
 	cmd.Flags().StringVar(&fromStep, "from", "", "Force re-run from this step (invalidates subsequent steps)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "Skip all step caching, re-run everything")
-	cmd.Flags().StringVarP(&mode, "mode", "m", "local", "Deployment mode (local, remote)")
 
 	return cmd
 }

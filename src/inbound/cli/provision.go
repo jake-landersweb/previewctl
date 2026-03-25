@@ -10,7 +10,6 @@ import (
 func newProvisionCmd() *cobra.Command {
 	var (
 		branch   string
-		mode     string
 		fromStep string
 		noCache  bool
 	)
@@ -32,7 +31,7 @@ on the target compute to execute the runner phase.`,
 			}
 
 			progress := NewCLIProgressReporter()
-			mgr, _, err := buildManagerWithMode(progress, mode)
+			mgr, _, err := buildManager(progress)
 			if err != nil {
 				return err
 			}
@@ -76,7 +75,6 @@ on the target compute to execute the runner phase.`,
 	}
 
 	cmd.Flags().StringVarP(&branch, "branch", "b", "", "Git branch name (defaults to environment name)")
-	cmd.Flags().StringVarP(&mode, "mode", "m", "local", "Deployment mode (local, remote)")
 	cmd.Flags().StringVar(&fromStep, "from", "", "Force re-run from this step (invalidates subsequent steps)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "Skip all step caching, re-run everything")
 

@@ -15,6 +15,9 @@ import (
 
 const configFileName = "previewctl.yaml"
 
+// globalMode holds the --mode flag value, set as a persistent flag on root.
+var globalMode string
+
 // Execute runs the CLI.
 func Execute() {
 	rootCmd := &cobra.Command{
@@ -29,6 +32,7 @@ func Execute() {
 		},
 	}
 	rootCmd.Flags().BoolP("version", "v", false, "Print the current version and check for updates")
+	rootCmd.PersistentFlags().StringVarP(&globalMode, "mode", "m", "local", "Deployment mode (local, remote)")
 
 	rootCmd.AddCommand(
 		newCreateCmd(),
@@ -42,6 +46,7 @@ func Execute() {
 		newProvisionerCmd(),
 		newVetCmd(),
 		newCleanCmd(),
+		newMigrateCmd(),
 		newVersionCmd(),
 	)
 
@@ -51,9 +56,9 @@ func Execute() {
 	}
 }
 
-// buildManager loads config with "local" mode, wires adapters, and creates a Manager.
+// buildManager loads config using the global --mode flag, wires adapters, and creates a Manager.
 func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.ProjectConfig, error) {
-	return buildManagerWithMode(progress, "local")
+	return buildManagerWithMode(progress, globalMode)
 }
 
 // buildManagerWithMode loads config with the specified mode overlay, wires adapters, and creates a Manager.
