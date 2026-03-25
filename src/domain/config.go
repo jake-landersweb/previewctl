@@ -188,19 +188,59 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 		base.Infrastructure = overlay.Infrastructure
 	}
 
-	// Merge Services
+	// Merge Services (field-level: overlay fields override base, env maps are additive)
 	if overlay.Services != nil {
 		if base.Services == nil {
 			base.Services = make(map[string]ServiceConfig)
 		}
-		for k, v := range overlay.Services {
-			base.Services[k] = v
+		for k, overlaySvc := range overlay.Services {
+			baseSvc, exists := base.Services[k]
+			if !exists {
+				base.Services[k] = overlaySvc
+				continue
+			}
+			if overlaySvc.Path != "" {
+				baseSvc.Path = overlaySvc.Path
+			}
+			if overlaySvc.Command != "" {
+				baseSvc.Command = overlaySvc.Command
+			}
+			if len(overlaySvc.DependsOn) > 0 {
+				baseSvc.DependsOn = overlaySvc.DependsOn
+			}
+			if overlaySvc.EnvFile != "" {
+				baseSvc.EnvFile = overlaySvc.EnvFile
+			}
+			if overlaySvc.Env != nil {
+				if baseSvc.Env == nil {
+					baseSvc.Env = make(map[string]string)
+				}
+				for ek, ev := range overlaySvc.Env {
+					baseSvc.Env[ek] = ev
+				}
+			}
+			base.Services[k] = baseSvc
 		}
 	}
 
-	// Merge Runner
+	// Merge Runner (field-level: overlay fields override base)
 	if overlay.Runner != nil {
-		base.Runner = overlay.Runner
+		if base.Runner == nil {
+			base.Runner = overlay.Runner
+		} else {
+			if overlay.Runner.Before != "" {
+				base.Runner.Before = overlay.Runner.Before
+			}
+			if overlay.Runner.Deploy != "" {
+				base.Runner.Deploy = overlay.Runner.Deploy
+			}
+			if overlay.Runner.After != "" {
+				base.Runner.After = overlay.Runner.After
+			}
+			if overlay.Runner.Destroy != "" {
+				base.Runner.Destroy = overlay.Runner.Destroy
+			}
+		}
 	}
 }
 
