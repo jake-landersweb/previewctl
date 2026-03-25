@@ -138,12 +138,12 @@ func (a *ComputeAdapter) DetectBranch(ctx context.Context, worktreePath string) 
 
 // composeEnv returns os.Environ() with COMPOSE_PROJECT_NAME set for the given environment.
 func (a *ComputeAdapter) composeEnv(envName string) []string {
-	return append(os.Environ(), fmt.Sprintf("COMPOSE_PROJECT_NAME=%s-%s", a.config.Name, envName))
+	return append(os.Environ(), fmt.Sprintf("COMPOSE_PROJECT_NAME=%s", domain.ComposeProjectName(a.config.Name, envName)))
 }
 
 func (a *ComputeAdapter) buildComposeEnv(envName string, ports domain.PortMap) []string {
 	env := []string{
-		fmt.Sprintf("COMPOSE_PROJECT_NAME=%s-%s", a.config.Name, envName),
+		fmt.Sprintf("COMPOSE_PROJECT_NAME=%s", domain.ComposeProjectName(a.config.Name, envName)),
 	}
 
 	// Pass all infrastructure ports as env vars (e.g., REDIS_PORT=6421)

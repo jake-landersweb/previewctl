@@ -46,10 +46,30 @@ type ComputeAccessInfo struct {
 	ManagedWorktree bool   `json:"managedWorktree,omitempty"` // true = created by previewctl
 }
 
-// ComposeProjectName returns the compose project name for this environment.
-func ComposeProjectName(projectName, envName string) string {
-	return projectName + "-" + envName
+// SanitizeName replaces characters not safe for use in database names, file paths,
+// and Docker Compose project names. Lowercase alphanumeric, hyphens, and underscores only.
+func SanitizeName(name string) string {
+	var b []byte
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+			b = append(b, c)
+		case c >= 'A' && c <= 'Z':
+			b = append(b, c+32) // lowercase
+		default:
+			b = append(b, '_')
+		}
+	}
+	return string(b)
 }
+
+// ComposeProjectName returns the compose project name for this environment.
+// Sanitizes to match Docker Compose requirements: lowercase alphanumeric, hyphens, underscores.
+func ComposeProjectName(projectName, envName string) string {
+	return SanitizeName(projectName + "-" + envName)
+}
+
 
 // StepRecordStatus represents the persisted outcome of a step.
 type StepRecordStatus string
