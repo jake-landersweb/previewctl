@@ -15,6 +15,9 @@ import (
 
 const configFileName = "previewctl.yaml"
 
+// globalMode holds the --mode flag value, set as a persistent flag on root.
+var globalMode string
+
 // Execute runs the CLI.
 func Execute() {
 	rootCmd := &cobra.Command{
@@ -29,6 +32,7 @@ func Execute() {
 		},
 	}
 	rootCmd.Flags().BoolP("version", "v", false, "Print the current version and check for updates")
+	rootCmd.PersistentFlags().StringVarP(&globalMode, "mode", "m", "local", "Deployment mode (local, remote)")
 
 	rootCmd.AddCommand(
 		newCreateCmd(),
@@ -42,6 +46,7 @@ func Execute() {
 		newProvisionerCmd(),
 		newVetCmd(),
 		newCleanCmd(),
+		newMigrateCmd(),
 		newVersionCmd(),
 	)
 
@@ -51,9 +56,9 @@ func Execute() {
 	}
 }
 
-// buildManager loads config with "local" mode, wires adapters, and creates a Manager.
+// buildManager loads config using the global --mode flag, wires adapters, and creates a Manager.
 func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.ProjectConfig, error) {
-	return buildManagerWithMode(progress, "local")
+	return buildManagerWithMode(progress, globalMode)
 }
 
 // buildManagerWithMode loads config with the specified mode overlay, wires adapters, and creates a Manager.
@@ -69,14 +74,28 @@ func buildManagerWithMode(progress domain.ProgressReporter, mode string) (*domai
 		composeFile = filepath.Join(projectRoot, cfg.Infrastructure.ComposeFile)
 	}
 
-	// Build state path
-	home, _ := os.UserHomeDir()
-	statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
+	// Build state adapter based on mode
+	var stateAdapter domain.StatePort
+	if mode == "remote" {
+		dsn := os.Getenv("PREVIEWCTL_STATE_DSN")
+		if dsn == "" {
+			return nil, nil, fmt.Errorf("PREVIEWCTL_STATE_DSN is required for remote mode")
+		}
+		pgAdapter, err := filestate.NewPostgresStateAdapter(dsn, cfg.Name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("connecting to state database: %w", err)
+		}
+		stateAdapter = pgAdapter
+	} else {
+		home, _ := os.UserHomeDir()
+		statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
+		stateAdapter = filestate.NewFileStateAdapter(statePath)
+	}
 
 	mgr := domain.NewManager(domain.ManagerDeps{
 		Compute:     local.NewComputeAdapter(cfg, composeFile),
 		Networking:  local.NewNetworkingAdapter(cfg),
-		State:       filestate.NewFileStateAdapter(statePath),
+		State:       stateAdapter,
 		Progress:    progress,
 		Config:      cfg,
 		ProjectRoot: projectRoot,

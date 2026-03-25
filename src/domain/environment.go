@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -70,6 +71,19 @@ func ComposeProjectName(projectName, envName string) string {
 	return SanitizeName(projectName + "-" + envName)
 }
 
+// BuildComposeEnv builds the environment variables for running docker compose commands.
+// Includes COMPOSE_PROJECT_NAME and port mappings (e.g., REDIS_PORT=6421).
+// The returned slice is suitable for passing to ComputeAccess.Exec.
+func BuildComposeEnv(projectName, envName string, ports PortMap) []string {
+	env := []string{
+		fmt.Sprintf("COMPOSE_PROJECT_NAME=%s", ComposeProjectName(projectName, envName)),
+	}
+	for name, port := range ports {
+		envVar := fmt.Sprintf("%s_PORT=%d", strings.ToUpper(strings.ReplaceAll(name, "-", "_")), port)
+		env = append(env, envVar)
+	}
+	return env
+}
 
 // StepRecordStatus represents the persisted outcome of a step.
 type StepRecordStatus string
