@@ -3,6 +3,7 @@ package domain
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -122,6 +123,8 @@ type mockProgressReporter struct {
 func (m *mockProgressReporter) OnStep(event StepEvent) {
 	m.events = append(m.events, event)
 }
+
+func (m *mockProgressReporter) StderrWriter() io.Writer { return os.Stderr }
 
 func newTestManager(tracker *mockTracker) (*Manager, *mockStatePort, *mockProgressReporter) {
 	statePort := newMockStatePort(tracker)

@@ -45,6 +45,7 @@ func Execute() {
 		newStepsCmd(),
 		newProvisionerCmd(),
 		newVetCmd(),
+		newSSHCmd(),
 		newCleanCmd(),
 		newMigrateCmd(),
 		newVersionCmd(),

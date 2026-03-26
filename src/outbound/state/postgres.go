@@ -19,6 +19,7 @@ var migrations embed.FS
 
 // PostgresStateAdapter persists state to a PostgreSQL database.
 // Each environment is stored as a JSONB row, scoped by project name.
+// Deleted environments are soft-deleted (is_deleted = true) for audit history.
 // Run RunMigrations before first use to ensure the schema is up to date.
 type PostgresStateAdapter struct {
 	db      *sql.DB
@@ -63,7 +64,7 @@ func RunMigrations(dsn string) error {
 
 func (a *PostgresStateAdapter) Load(ctx context.Context) (*domain.State, error) {
 	rows, err := a.db.QueryContext(ctx,
-		`SELECT name, data FROM environments WHERE project = $1`, a.project)
+		`SELECT name, data FROM environments WHERE project = $1 AND is_deleted = false`, a.project)
 	if err != nil {
 		return nil, fmt.Errorf("querying environments: %w", err)
 	}
@@ -96,19 +97,26 @@ func (a *PostgresStateAdapter) Save(ctx context.Context, state *domain.State) er
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Soft-delete all active environments for this project
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM environments WHERE project = $1`, a.project); err != nil {
-		return fmt.Errorf("clearing environments: %w", err)
+		`UPDATE environments SET is_deleted = true, updated_at = now() WHERE project = $1 AND is_deleted = false`,
+		a.project); err != nil {
+		return fmt.Errorf("soft-deleting environments: %w", err)
 	}
 
+	// Upsert all current environments
 	for name, entry := range state.Environments {
 		data, err := json.Marshal(entry)
 		if err != nil {
 			return fmt.Errorf("marshaling environment '%s': %w", name, err)
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO environments (project, name, data, updated_at) VALUES ($1, $2, $3, now())`,
-			a.project, name, data); err != nil {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO environments (project, name, data, branch, status, is_deleted, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, false, $6, now())
+			ON CONFLICT (project, name)
+			DO UPDATE SET data = EXCLUDED.data, branch = EXCLUDED.branch, status = EXCLUDED.status,
+			             is_deleted = false, updated_at = now()
+		`, a.project, name, data, entry.Branch, string(entry.Status), entry.CreatedAt); err != nil {
 			return fmt.Errorf("inserting environment '%s': %w", name, err)
 		}
 	}
@@ -119,7 +127,7 @@ func (a *PostgresStateAdapter) Save(ctx context.Context, state *domain.State) er
 func (a *PostgresStateAdapter) GetEnvironment(ctx context.Context, name string) (*domain.EnvironmentEntry, error) {
 	var data []byte
 	err := a.db.QueryRowContext(ctx,
-		`SELECT data FROM environments WHERE project = $1 AND name = $2`,
+		`SELECT data FROM environments WHERE project = $1 AND name = $2 AND is_deleted = false`,
 		a.project, name).Scan(&data)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -142,11 +150,12 @@ func (a *PostgresStateAdapter) SetEnvironment(ctx context.Context, name string, 
 	}
 
 	_, err = a.db.ExecContext(ctx, `
-		INSERT INTO environments (project, name, data, updated_at)
-		VALUES ($1, $2, $3, now())
+		INSERT INTO environments (project, name, data, branch, status, is_deleted, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, false, $6, now())
 		ON CONFLICT (project, name)
-		DO UPDATE SET data = EXCLUDED.data, updated_at = now()
-	`, a.project, name, data)
+		DO UPDATE SET data = EXCLUDED.data, branch = EXCLUDED.branch, status = EXCLUDED.status,
+		             is_deleted = false, updated_at = now()
+	`, a.project, name, data, entry.Branch, string(entry.Status), entry.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting environment '%s': %w", name, err)
 	}
@@ -155,10 +164,11 @@ func (a *PostgresStateAdapter) SetEnvironment(ctx context.Context, name string, 
 
 func (a *PostgresStateAdapter) RemoveEnvironment(ctx context.Context, name string) error {
 	_, err := a.db.ExecContext(ctx,
-		`DELETE FROM environments WHERE project = $1 AND name = $2`,
+		`UPDATE environments SET is_deleted = true, status = 'deleted', updated_at = now()
+		 WHERE project = $1 AND name = $2`,
 		a.project, name)
 	if err != nil {
-		return fmt.Errorf("removing environment '%s': %w", name, err)
+		return fmt.Errorf("soft-deleting environment '%s': %w", name, err)
 	}
 	return nil
 }

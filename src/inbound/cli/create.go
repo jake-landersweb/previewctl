@@ -8,7 +8,10 @@ import (
 )
 
 func newCreateCmd() *cobra.Command {
-	var branch string
+	var (
+		branch  string
+		noCache bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "create <name>",
@@ -24,6 +27,9 @@ func newCreateCmd() *cobra.Command {
 			mgr, _, err := buildManager(progress)
 			if err != nil {
 				return err
+			}
+			if noCache {
+				mgr.SetNoCache(true)
 			}
 
 			Header(fmt.Sprintf("Creating environment %s",
@@ -59,6 +65,7 @@ func newCreateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&branch, "branch", "b", "", "Git branch name (defaults to environment name)")
+	cmd.Flags().BoolVar(&noCache, "no-cache", false, "Skip all step caching, re-run everything")
 
 	return cmd
 }

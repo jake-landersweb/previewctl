@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -376,21 +377,26 @@ func (m *Manager) saveProvisionedState(ctx context.Context, envName, branch stri
 	return entry, nil
 }
 
-func (m *Manager) loadManifestFromEntry(_ context.Context, entry *EnvironmentEntry) (ComputeAccess, *Manifest, error) {
-	wtPath := entry.WorktreePath()
-	if wtPath == "" {
-		return nil, nil, fmt.Errorf("environment '%s' has no compute path", entry.Name)
+func (m *Manager) loadManifestFromEntry(ctx context.Context, entry *EnvironmentEntry) (ComputeAccess, *Manifest, error) {
+	if entry.Compute == nil {
+		return nil, nil, fmt.Errorf("environment '%s' has no compute info", entry.Name)
 	}
-	manifestPath := filepath.Join(wtPath, ".previewctl.json")
-	data, err := os.ReadFile(manifestPath)
+
+	var ca ComputeAccess
+	if entry.Compute.Type == "ssh" {
+		ca = NewDomainSSHComputeAccess(entry.Compute.Host, entry.Compute.User, entry.Compute.Path)
+	} else {
+		ca = NewDomainLocalComputeAccess(entry.Compute.Path)
+	}
+
+	data, err := ca.ReadFile(ctx, ".previewctl.json")
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading manifest from %s: %w", manifestPath, err)
+		return nil, nil, fmt.Errorf("reading manifest from compute: %w", err)
 	}
 	manifest, err := ReadManifest(bytes.NewReader(data))
 	if err != nil {
 		return nil, nil, fmt.Errorf("parsing manifest: %w", err)
 	}
-	ca := NewDomainLocalComputeAccess(wtPath)
 	return ca, manifest, nil
 }
 
@@ -432,9 +438,9 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			StartMsg:    fmt.Sprintf("Running provisioner.before → %s", m.config.Provisioner.Before),
 			CompleteMsg: &beforeMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "provisioner_before", Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: "provisioner_before", Status: StepStreaming, Message: fmt.Sprintf("Running provisioner.before → %s", m.config.Provisioner.Before)})
 				env := m.buildHookEnv(envName, existingWorktree, nil)
-				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot)
+				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot, m.progress.StderrWriter())
 				return err
 			},
 		}); err != nil {
@@ -457,12 +463,12 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			StartMsg:    "Creating remote compute...",
 			CompleteMsg: &createMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "create_compute", Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: "create_compute", Status: StepStreaming, Message: "Creating remote compute..."})
 				env := m.buildHookEnv(envName, "", nil)
 				env = append(env, fmt.Sprintf("PREVIEWCTL_BRANCH=%s", branch))
 				var err error
 				computeOutputs, err = ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Create,
-					m.config.Provisioner.Compute.Outputs, env, m.projectRoot)
+					m.config.Provisioner.Compute.Outputs, env, m.projectRoot, m.progress.StderrWriter())
 				return err
 			},
 			Verify: func(ctx context.Context) error {
@@ -532,6 +538,11 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 		}
 	}
 
+	// Wire stderr through the progress reporter for indented output
+	if setter, ok := ca.(interface{ SetStderr(io.Writer) }); ok {
+		setter.SetStderr(m.progress.StderrWriter())
+	}
+
 	// 4. Allocate ports
 	var ports PortMap
 	// Load cached ports if step was completed
@@ -580,7 +591,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			StartMsg:    fmt.Sprintf("Seeding %s → %s", svcName, svc.Seed),
 			CompleteMsg: &seedMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: stepName, Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: stepName, Status: StepStreaming, Message: fmt.Sprintf("Seeding %s → %s", svcNameCopy, svc.Seed)})
 				outputs, err := m.runCoreHook(ctx, svcNameCopy, "seed", envName, ports)
 				if err != nil {
 					return err
@@ -647,9 +658,9 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			StartMsg:    fmt.Sprintf("Running provisioner.after → %s", m.config.Provisioner.After),
 			CompleteMsg: &afterMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "provisioner_after", Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: "provisioner_after", Status: StepStreaming, Message: fmt.Sprintf("Running provisioner.after → %s", m.config.Provisioner.After)})
 				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
-				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.After, nil, env, m.projectRoot)
+				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.After, nil, env, m.projectRoot, m.progress.StderrWriter())
 				return err
 			},
 		}); err != nil {
@@ -663,6 +674,11 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 // runRunner executes the runner phase with optional checkpointing.
 // When entry is nil, no checkpointing occurs (stateless mode).
 func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca ComputeAccess, manifest *Manifest, managedWorktree, saveState bool, entry *EnvironmentEntry) (*EnvironmentEntry, error) {
+	// Wire stderr through the progress reporter
+	if setter, ok := ca.(interface{ SetStderr(io.Writer) }); ok {
+		setter.SetStderr(m.progress.StderrWriter())
+	}
+
 	// 0. Sync code on re-runs (pull latest from remote)
 	// Only runs when the runner has already completed before (re-run, not first create).
 	// Runs directly (not via step()) so it always executes — the point is to pull fresh code.
@@ -684,7 +700,7 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 			StartMsg:    fmt.Sprintf("Running runner.before → %s", m.config.Runner.Before),
 			CompleteMsg: &beforeMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_before", Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: "runner_before", Status: StepStreaming, Message: fmt.Sprintf("Running runner.before → %s", m.config.Runner.Before)})
 				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
 				_, err := ca.Exec(ctx, m.config.Runner.Before, env)
 				return err
@@ -764,7 +780,7 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 			StartMsg:    fmt.Sprintf("Running runner.deploy → %s", m.config.Runner.Deploy),
 			CompleteMsg: &deployMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_deploy", Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: "runner_deploy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.deploy → %s", m.config.Runner.Deploy)})
 				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
 				_, err := ca.Exec(ctx, m.config.Runner.Deploy, env)
 				return err
@@ -782,7 +798,7 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 			StartMsg:    fmt.Sprintf("Running runner.after → %s", m.config.Runner.After),
 			CompleteMsg: &afterMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_after", Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: "runner_after", Status: StepStreaming, Message: fmt.Sprintf("Running runner.after → %s", m.config.Runner.After)})
 				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
 				_, err := ca.Exec(ctx, m.config.Runner.After, env)
 				return err
@@ -858,7 +874,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 			fmt.Sprintf("Running runner.destroy → %s", m.config.Runner.Destroy),
 			&destroyMsg,
 			func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_destroy", Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: "runner_destroy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.destroy → %s", m.config.Runner.Destroy)})
 				env := m.buildHookEnv(envName, ca.Root(), entry.Ports)
 				_, err := ca.Exec(ctx, m.config.Runner.Destroy, env)
 				return err
@@ -877,7 +893,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 			fmt.Sprintf("Running destroy hook for %s...", svcName),
 			&destroyMsg,
 			func() error {
-				m.progress.OnStep(StepEvent{Step: fmt.Sprintf("destroy_core_%s", svcName), Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: fmt.Sprintf("destroy_core_%s", svcName), Status: StepStreaming, Message: fmt.Sprintf("Running destroy hook for %s...", svcName)})
 				_, err := m.runCoreHook(ctx, svcName, "destroy", envName, entry.Ports)
 				return err
 			}); err != nil {
@@ -889,7 +905,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 	if m.config.Provisioner.Compute != nil && m.config.Provisioner.Compute.Destroy != "" {
 		destroyMsg := "Compute destroyed via hook"
 		if err := m.stepSimple(ctx, "destroy_compute_hook", "Destroying remote compute...", &destroyMsg, func() error {
-			m.progress.OnStep(StepEvent{Step: "destroy_compute_hook", Status: StepStreaming})
+			m.progress.OnStep(StepEvent{Step: "destroy_compute_hook", Status: StepStreaming, Message: "Destroying remote compute..."})
 			env := m.buildHookEnv(envName, "", entry.Ports)
 			if entry.Compute != nil {
 				env = append(env,
@@ -897,7 +913,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 					fmt.Sprintf("PREVIEWCTL_SSH_USER=%s", entry.Compute.User),
 				)
 			}
-			_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Destroy, nil, env, m.projectRoot)
+			_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Destroy, nil, env, m.projectRoot, m.progress.StderrWriter())
 			return err
 		}); err != nil {
 			return fmt.Errorf("compute destroy hook: %w", err)
@@ -952,6 +968,11 @@ func (m *Manager) List(ctx context.Context) ([]*EnvironmentEntry, error) {
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// GetEnvironment returns a single environment entry from state, or nil if not found.
+func (m *Manager) GetEnvironment(ctx context.Context, envName string) (*EnvironmentEntry, error) {
+	return m.state.GetEnvironment(ctx, envName)
 }
 
 func (m *Manager) Status(ctx context.Context, envName string) (*EnvironmentDetail, error) {
@@ -1018,7 +1039,7 @@ func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName stri
 	if action == "seed" || action == "reset" {
 		requiredOutputs = svc.Outputs
 	}
-	return ExecuteCoreHook(ctx, hookScript, requiredOutputs, env, m.projectRoot)
+	return ExecuteCoreHook(ctx, hookScript, requiredOutputs, env, m.projectRoot, m.progress.StderrWriter())
 }
 
 func (m *Manager) buildHookEnv(envName, worktreePath string, ports PortMap) []string {
@@ -1051,7 +1072,7 @@ func (m *Manager) CoreInit(ctx context.Context, svcName string) error {
 		fmt.Sprintf("Running init hook for %s...", svcName),
 		&initMsg,
 		func() error {
-			m.progress.OnStep(StepEvent{Step: "core_init", Status: StepStreaming})
+			m.progress.OnStep(StepEvent{Step: "core_init", Status: StepStreaming, Message: fmt.Sprintf("Running init hook for %s...", svcName)})
 			_, err := m.runCoreHook(ctx, svcName, "init", "", nil)
 			return err
 		}); err != nil {
@@ -1080,7 +1101,7 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 		fmt.Sprintf("Running reset hook for %s...", svcName),
 		&resetMsg,
 		func() error {
-			m.progress.OnStep(StepEvent{Step: "core_reset", Status: StepStreaming})
+			m.progress.OnStep(StepEvent{Step: "core_reset", Status: StepStreaming, Message: fmt.Sprintf("Running reset hook for %s...", svcName)})
 			outputs, err := m.runCoreHook(ctx, svcName, "reset", envName, entry.Ports)
 			if err != nil {
 				return err
@@ -1102,12 +1123,15 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 // ---------- DomainLocalComputeAccess ----------
 
 type DomainLocalComputeAccess struct {
-	root string
+	root   string
+	stderr io.Writer
 }
 
 func NewDomainLocalComputeAccess(root string) ComputeAccess {
-	return &DomainLocalComputeAccess{root: root}
+	return &DomainLocalComputeAccess{root: root, stderr: os.Stderr}
 }
+
+func (l *DomainLocalComputeAccess) SetStderr(w io.Writer) { l.stderr = w }
 
 func (l *DomainLocalComputeAccess) WriteFile(_ context.Context, relPath string, data []byte, mode os.FileMode) error {
 	absPath := filepath.Join(l.root, relPath)
@@ -1129,7 +1153,7 @@ func (l *DomainLocalComputeAccess) Exec(ctx context.Context, command string, env
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = l.root
 	cmd.Env = env
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = l.stderr
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {

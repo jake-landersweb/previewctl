@@ -2,6 +2,8 @@ package domain
 
 import (
 	"context"
+	"io"
+	"os"
 )
 
 // ComputePort manages the compute substrate for an environment.
@@ -62,9 +64,13 @@ type StatePort interface {
 // Inbound adapters implement this to render progress (CLI spinners, SSE, etc).
 type ProgressReporter interface {
 	OnStep(event StepEvent)
+	// StderrWriter returns a writer for hook stderr output.
+	// The reporter may indent or buffer this output for display.
+	StderrWriter() io.Writer
 }
 
 // NoopReporter is a ProgressReporter that discards all events.
 type NoopReporter struct{}
 
-func (NoopReporter) OnStep(StepEvent) {}
+func (NoopReporter) OnStep(StepEvent)          {}
+func (NoopReporter) StderrWriter() io.Writer   { return os.Stderr }
