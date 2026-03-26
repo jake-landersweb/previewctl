@@ -72,13 +72,12 @@ func (s *DomainSSHComputeAccess) Exec(ctx context.Context, command string, env [
 	for _, e := range env {
 		if strings.HasPrefix(e, "PREVIEWCTL_") ||
 			strings.HasPrefix(e, "COMPOSE_") ||
-			strings.HasPrefix(e, "TURBO_") ||
 			strings.HasSuffix(strings.SplitN(e, "=", 2)[0], "_PORT") {
 			fmt.Fprintf(&envPrefix, "export %s; ", e)
 		}
 	}
 
-	remoteCmd := fmt.Sprintf("cd %q && %s%s", s.root, envPrefix.String(), command)
+	remoteCmd := fmt.Sprintf("set -a; [ -f /etc/environment ] && . /etc/environment; set +a; cd %q && %s%s", s.root, envPrefix.String(), command)
 	cmd := exec.CommandContext(ctx, "ssh", s.target(), remoteCmd)
 	cmd.Stderr = s.stderr
 
