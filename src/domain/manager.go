@@ -227,7 +227,12 @@ func (m *Manager) BuildProvisionerStepOrder() []string {
 
 // BuildRunnerStepOrder returns the canonical step order for the runner phase.
 func (m *Manager) BuildRunnerStepOrder() []string {
-	return []string{"runner_before", "generate_env", "start_infra", "runner_deploy", "runner_after"}
+	steps := []string{"runner_before", "generate_env", "start_infra"}
+	if m.config.Runner != nil && m.config.Runner.Compose != nil {
+		steps = append(steps, "generate_compose", "generate_nginx", "build_services", "start_services")
+	}
+	steps = append(steps, "runner_deploy", "runner_after")
+	return steps
 }
 
 // ---------- Output deserialization helpers ----------
@@ -341,6 +346,38 @@ func (m *Manager) Run(ctx context.Context, manifestPath, fromStep string) error 
 
 	// For stateless run, entry is nil — no checkpointing
 	_, err = m.runRunner(ctx, manifest.EnvName, manifest.Branch, ca, manifest, false, false, nil)
+	return err
+}
+
+// RunStep executes a single runner-phase step in isolation.
+// Loads the environment from state, reconstructs compute access, reads the manifest,
+// and runs the specified step without checkpointing (always executes).
+func (m *Manager) RunStep(ctx context.Context, envName, stepName string) error {
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return fmt.Errorf("loading environment: %w", err)
+	}
+	if entry == nil {
+		return fmt.Errorf("environment '%s' not found", envName)
+	}
+
+	ca, manifest, err := m.loadManifestFromEntry(ctx, entry)
+	if err != nil {
+		return err
+	}
+
+	// Temporarily enable noCache so the step always runs
+	origNoCache := m.noCache
+	m.noCache = true
+	defer func() { m.noCache = origNoCache }()
+
+	// Run the single step through the runner, which will skip all other cached steps
+	// and only execute the target step (since noCache is true, it runs everything,
+	// but we want just one step). Instead, call runRunner and let it execute —
+	// the noCache flag means nothing is skipped.
+	// TODO: For true single-step execution, we'd need to extract each step into
+	// a callable function. For now, run the full runner with noCache.
+	_, err = m.runRunner(ctx, envName, entry.Branch, ca, manifest, false, true, entry)
 	return err
 }
 
@@ -772,7 +809,90 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 		return nil, fmt.Errorf("starting infrastructure: %w", err)
 	}
 
-	// 4. runner.deploy hook
+	// 4-7. Compose-managed services (only when runner.compose is configured)
+	if m.config.Runner != nil && m.config.Runner.Compose != nil {
+		// 4. Generate Docker Compose file
+		if err := m.step(ctx, entry, StepOpts{
+			Name:        "generate_compose",
+			StartMsg:    "Generating Docker Compose file...",
+			CompleteMsg: msg("Docker Compose file generated"),
+			Fn: func() error {
+				data, err := GenerateComposeFile(m.config, manifest)
+				if err != nil {
+					return fmt.Errorf("generating compose file: %w", err)
+				}
+				return ca.WriteFile(ctx, ".previewctl.compose.yaml", data, 0o644)
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("generating compose file: %w", err)
+		}
+
+		// 5. Generate proxy config (nginx, etc.) if enabled
+		if m.config.Runner.Compose.Proxy.IsEnabled() {
+			if err := m.step(ctx, entry, StepOpts{
+				Name:        "generate_nginx",
+				StartMsg:    "Generating nginx config...",
+				CompleteMsg: msg("nginx config generated"),
+				Fn: func() error {
+					domain := m.config.Runner.Compose.Proxy.Domain
+					if domain == "" {
+						return fmt.Errorf("runner.compose.proxy.domain is required")
+					}
+					data, err := GenerateNginxConfig(m.config, manifest, domain)
+					if err != nil {
+						return fmt.Errorf("generating nginx config: %w", err)
+					}
+					return ca.WriteFile(ctx, "preview/nginx.conf", data, 0o644)
+				},
+			}); err != nil {
+				return nil, fmt.Errorf("generating nginx config: %w", err)
+			}
+		}
+
+		// 6. Build autostart services
+		if err := m.step(ctx, entry, StepOpts{
+			Name:        "build_services",
+			StartMsg:    "Building services...",
+			CompleteMsg: msg("Services built"),
+			Fn: func() error {
+				m.progress.OnStep(StepEvent{Step: "build_services", Status: StepStreaming})
+				for _, svcName := range m.config.Runner.Compose.Autostart {
+					svc, ok := m.config.Services[svcName]
+					if !ok || svc.Build == "" {
+						continue
+					}
+					if _, err := ca.Exec(ctx, svc.Build, nil); err != nil {
+						return fmt.Errorf("building service '%s': %w", svcName, err)
+					}
+				}
+				return nil
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("building services: %w", err)
+		}
+
+		// 7. Start autostart services (+ proxy if enabled)
+		if err := m.step(ctx, entry, StepOpts{
+			Name:        "start_services",
+			StartMsg:    "Starting services...",
+			CompleteMsg: msg("Services started"),
+			Fn: func() error {
+				var services []string
+				if m.config.Runner.Compose.Proxy.IsEnabled() {
+					proxyType := m.config.Runner.Compose.Proxy.ResolvedType()
+					services = append(services, proxyType) // e.g., "nginx"
+				}
+				services = append(services, m.config.Runner.Compose.Autostart...)
+				cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml up -d %s", strings.Join(services, " "))
+				_, err := ca.Exec(ctx, cmd, nil)
+				return err
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("starting services: %w", err)
+		}
+	}
+
+	// 8. runner.deploy hook
 	if m.config.Runner != nil && m.config.Runner.Deploy != "" {
 		deployMsg := fmt.Sprintf("Ran runner.deploy (%s)", m.config.Runner.Deploy)
 		if err := m.step(ctx, entry, StepOpts{

@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jake-landersweb/previewctl/src/domain"
 	"github.com/jake-landersweb/previewctl/src/outbound/local"
@@ -18,11 +20,17 @@ const configFileName = "previewctl.yaml"
 // globalMode holds the --mode flag value, set as a persistent flag on root.
 var globalMode string
 
+// globalEnvFiles holds the --env-file flag value.
+var globalEnvFiles string
+
 // Execute runs the CLI.
 func Execute() {
 	rootCmd := &cobra.Command{
 		Use:   "previewctl",
 		Short: "Manage isolated preview and development environments",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return loadEnvFiles(globalEnvFiles)
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			if v, _ := cmd.Flags().GetBool("version"); v {
 				runVersionCheck()
@@ -33,6 +41,7 @@ func Execute() {
 	}
 	rootCmd.Flags().BoolP("version", "v", false, "Print the current version and check for updates")
 	rootCmd.PersistentFlags().StringVarP(&globalMode, "mode", "m", "local", "Deployment mode (local, remote)")
+	rootCmd.PersistentFlags().StringVar(&globalEnvFiles, "env-file", "", "Comma-separated list of env files to load (in addition to .env and .env.previewctl)")
 
 	rootCmd.AddCommand(
 		newCreateCmd(),
@@ -46,6 +55,8 @@ func Execute() {
 		newProvisionerCmd(),
 		newVetCmd(),
 		newSSHCmd(),
+		newServiceCmd(),
+		newStepCmd(),
 		newCleanCmd(),
 		newMigrateCmd(),
 		newVersionCmd(),
@@ -164,4 +175,82 @@ func resolveEnvName(args []string, statePath string) (string, error) {
 	}
 
 	return domain.ResolveEnvironmentFromCwd(cwd, fullState.Environments)
+}
+
+// loadEnvFiles loads environment variables from default files (.env, .env.previewctl)
+// and any additional files specified via --env-file. Files are loaded as overlays —
+// later files override earlier ones. Variables already set in the environment
+// (e.g., THIS_VAR=x previewctl ...) take priority over all files.
+func loadEnvFiles(extraFiles string) error {
+	// Snapshot existing env vars so we can preserve manual overrides
+	existing := make(map[string]bool)
+	for _, e := range os.Environ() {
+		if k, _, ok := strings.Cut(e, "="); ok {
+			existing[k] = true
+		}
+	}
+
+	// Default files (silently skip if missing)
+	defaults := []string{".env", ".env.previewctl"}
+	for _, f := range defaults {
+		if err := applyEnvFile(f, existing); err != nil {
+			return fmt.Errorf("loading %s: %w", f, err)
+		}
+	}
+
+	// Extra files from --env-file flag (error if missing)
+	if extraFiles != "" {
+		for _, f := range strings.Split(extraFiles, ",") {
+			f = strings.TrimSpace(f)
+			if f == "" {
+				continue
+			}
+			if _, err := os.Stat(f); err != nil {
+				return fmt.Errorf("env file not found: %s", f)
+			}
+			if err := applyEnvFile(f, existing); err != nil {
+				return fmt.Errorf("loading %s: %w", f, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// applyEnvFile reads a KEY=VALUE file and sets env vars.
+// Variables in the `preserve` set are not overwritten (they were set before any file loading).
+// Missing files are silently skipped.
+func applyEnvFile(path string, preserve map[string]bool) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // default files may not exist
+		}
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		// Strip surrounding quotes from value
+		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')) {
+			value = value[1 : len(value)-1]
+		}
+		// Don't override manually set variables
+		if preserve[key] {
+			continue
+		}
+		_ = os.Setenv(key, value)
+	}
+	return scanner.Err()
 }

@@ -51,10 +51,45 @@ type ComputeHooks struct {
 
 // RunnerConfig holds runner lifecycle hooks.
 type RunnerConfig struct {
-	Before  string `yaml:"before,omitempty"`
-	Deploy  string `yaml:"deploy,omitempty"`
-	Destroy string `yaml:"destroy,omitempty"`
-	After   string `yaml:"after,omitempty"`
+	Before  string         `yaml:"before,omitempty"`
+	Deploy  string         `yaml:"deploy,omitempty"`
+	Destroy string         `yaml:"destroy,omitempty"`
+	After   string         `yaml:"after,omitempty"`
+	Compose *ComposeConfig `yaml:"compose,omitempty"`
+}
+
+// ComposeConfig defines how previewctl generates and manages Docker Compose
+// for application services in remote mode.
+type ComposeConfig struct {
+	Autostart []string     `yaml:"autostart"`      // services started on create (proxy is always implicit if enabled)
+	Image     string       `yaml:"image"`           // base Docker image for app containers (e.g., "node:20")
+	Proxy     *ProxyConfig `yaml:"proxy,omitempty"` // reverse proxy configuration
+}
+
+// ProxyConfig defines the reverse proxy that sits in front of preview services.
+type ProxyConfig struct {
+	Enabled *bool  `yaml:"enabled,omitempty"` // defaults to true if omitted
+	Domain  string `yaml:"domain"`            // e.g., "preview.airgoods.com"
+	Type    string `yaml:"type,omitempty"`    // "nginx" (default). Future: "traefik", "caddy"
+}
+
+// IsEnabled returns whether the proxy is enabled (defaults to true).
+func (p *ProxyConfig) IsEnabled() bool {
+	if p == nil {
+		return false
+	}
+	if p.Enabled == nil {
+		return true
+	}
+	return *p.Enabled
+}
+
+// ResolvedType returns the proxy type, defaulting to "nginx".
+func (p *ProxyConfig) ResolvedType() string {
+	if p == nil || p.Type == "" {
+		return "nginx"
+	}
+	return p.Type
 }
 
 // InfrastructureConfig holds infrastructure configuration.
@@ -69,6 +104,31 @@ type ServiceConfig struct {
 	DependsOn []string          `yaml:"depends_on,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
 	EnvFile   string            `yaml:"env_file,omitempty"` // relative to path, defaults to ".env.local"
+	Build     string            `yaml:"build,omitempty"`    // build command (run on host before container starts)
+	Start     string            `yaml:"start,omitempty"`    // start command (run inside container). Required for compose generation.
+	Proxy     *ServiceProxy     `yaml:"proxy,omitempty"`    // optional reverse proxy rule for nginx
+}
+
+// ServiceProxy defines a reverse proxy rule on a service's subdomain.
+// When configured, nginx generates a location block that proxies the given
+// path to the target service's port (same-origin for IAP cookie compatibility).
+type ServiceProxy struct {
+	Path       string             `yaml:"path"`                  // source path the browser sends, e.g., "/api" or "/iapi"
+	TargetPath string             `yaml:"target_path,omitempty"` // path rewritten to on the target service. Defaults to Path if omitted.
+	To         ServiceProxyTarget `yaml:"to"`
+}
+
+// ResolvedTargetPath returns the target path, defaulting to Path if not set.
+func (p *ServiceProxy) ResolvedTargetPath() string {
+	if p.TargetPath != "" {
+		return p.TargetPath
+	}
+	return p.Path
+}
+
+// ServiceProxyTarget identifies the target service for a proxy rule.
+type ServiceProxyTarget struct {
+	Service string `yaml:"service"` // target service name, resolved to its port at generation time
 }
 
 // ResolvedEnvFile returns the env file path relative to the service path.
@@ -211,6 +271,15 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 			if overlaySvc.EnvFile != "" {
 				baseSvc.EnvFile = overlaySvc.EnvFile
 			}
+			if overlaySvc.Build != "" {
+				baseSvc.Build = overlaySvc.Build
+			}
+			if overlaySvc.Start != "" {
+				baseSvc.Start = overlaySvc.Start
+			}
+			if overlaySvc.Proxy != nil {
+				baseSvc.Proxy = overlaySvc.Proxy
+			}
 			if overlaySvc.Env != nil {
 				if baseSvc.Env == nil {
 					baseSvc.Env = make(map[string]string)
@@ -239,6 +308,9 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 			}
 			if overlay.Runner.Destroy != "" {
 				base.Runner.Destroy = overlay.Runner.Destroy
+			}
+			if overlay.Runner.Compose != nil {
+				base.Runner.Compose = overlay.Runner.Compose
 			}
 		}
 	}
