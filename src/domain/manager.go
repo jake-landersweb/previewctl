@@ -451,6 +451,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 	if entry == nil {
 		entry = &EnvironmentEntry{
 			Name:      envName,
+			Mode:      EnvironmentMode(m.config.Mode),
 			Branch:    branch,
 			Status:    StatusCreating,
 			CreatedAt: time.Now(),
@@ -859,23 +860,26 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 			}
 		}
 
-		// 6. Build autostart services
+		// 6. Build autostart services (batched into single SSH call)
 		if err := m.step(ctx, entry, StepOpts{
 			Name:        "build_services",
 			StartMsg:    "Building services...",
 			CompleteMsg: msg("Services built"),
 			Fn: func() error {
 				m.progress.OnStep(StepEvent{Step: "build_services", Status: StepStreaming})
+				var cmds []string
 				for _, svcName := range m.config.Runner.Compose.Autostart {
 					svc, ok := m.config.Services[svcName]
 					if !ok || svc.Build == "" {
 						continue
 					}
-					if _, err := ca.Exec(ctx, svc.Build, nil); err != nil {
-						return fmt.Errorf("building service '%s': %w", svcName, err)
-					}
+					cmds = append(cmds, svc.Build)
 				}
-				return nil
+				if len(cmds) == 0 {
+					return nil
+				}
+				_, err := ca.Exec(ctx, strings.Join(cmds, " && "), nil)
+				return err
 			},
 		}); err != nil {
 			return nil, fmt.Errorf("building services: %w", err)
