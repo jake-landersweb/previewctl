@@ -751,7 +751,7 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 		}
 	}
 
-	// 2. Generate .env files from manifest
+	// 2. Generate .env files from manifest (batched into a single SSH call)
 	envFiles := manifest.EnvFilePaths()
 	if len(envFiles) > 0 {
 		if err := m.step(ctx, entry, StepOpts{
@@ -759,13 +759,19 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 			StartMsg:    "Generating .env files...",
 			CompleteMsg: msg(".env files generated"),
 			Fn: func() error {
+				// Build a single script that writes all env files at once
+				var script strings.Builder
+				script.WriteString("set -e\n")
 				for relPath, envVars := range envFiles {
 					content := RenderEnvFileContent(envVars)
-					if err := ca.WriteFile(ctx, relPath, content, 0o644); err != nil {
-						return fmt.Errorf("writing %s: %w", relPath, err)
+					dir := filepath.Dir(relPath)
+					if dir != "." {
+						fmt.Fprintf(&script, "mkdir -p %q\n", dir)
 					}
+					fmt.Fprintf(&script, "cat > %q <<'ENVEOF'\n%sENVEOF\n", relPath, string(content))
 				}
-				return nil
+				_, err := ca.Exec(ctx, script.String(), nil)
+				return err
 			},
 		}); err != nil {
 			return nil, fmt.Errorf("generating env files: %w", err)
