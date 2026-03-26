@@ -72,6 +72,7 @@ func (s *DomainSSHComputeAccess) Exec(ctx context.Context, command string, env [
 	for _, e := range env {
 		if strings.HasPrefix(e, "PREVIEWCTL_") ||
 			strings.HasPrefix(e, "COMPOSE_") ||
+			strings.HasPrefix(e, "TURBO_") ||
 			strings.HasSuffix(strings.SplitN(e, "=", 2)[0], "_PORT") {
 			fmt.Fprintf(&envPrefix, "export %s; ", e)
 		}
