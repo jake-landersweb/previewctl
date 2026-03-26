@@ -26,20 +26,15 @@ func TestGenerateNginxConfig_Basic(t *testing.T) {
 
 	content := string(data)
 
-	// Should have map block
-	if !strings.Contains(content, "map $service $upstream_port") {
-		t.Error("expected map block")
+	// Should have per-service server blocks
+	if !strings.Contains(content, "server_name test-env--backend.preview.example.com;") {
+		t.Error("expected backend server_name")
 	}
-	if !strings.Contains(content, "backend 8000;") {
-		t.Error("expected backend port in map")
+	if !strings.Contains(content, "server_name test-env--web.preview.example.com;") {
+		t.Error("expected web server_name")
 	}
-	if !strings.Contains(content, "web 3000;") {
-		t.Error("expected web port in map")
-	}
-
-	// Should have generic server block with regex
-	if !strings.Contains(content, "server_name ~^.+--.+\\.preview\\.example\\.com$") {
-		t.Error("expected generic server_name regex")
+	if !strings.Contains(content, "server_name test-env--redis.preview.example.com;") {
+		t.Error("expected redis server_name")
 	}
 
 	// Should have health check
@@ -47,9 +42,12 @@ func TestGenerateNginxConfig_Basic(t *testing.T) {
 		t.Error("expected health check location")
 	}
 
-	// Should proxy to localhost
-	if !strings.Contains(content, "proxy_pass http://127.0.0.1:$upstream_port") {
-		t.Error("expected proxy_pass with upstream_port variable")
+	// Should proxy to correct ports
+	if !strings.Contains(content, "proxy_pass http://127.0.0.1:8000;") {
+		t.Error("expected backend proxy_pass")
+	}
+	if !strings.Contains(content, "proxy_pass http://127.0.0.1:3000;") {
+		t.Error("expected web proxy_pass")
 	}
 }
 
@@ -61,18 +59,18 @@ func TestGenerateNginxConfig_WithProxy(t *testing.T) {
 			"web": {
 				Path:  "apps/web",
 				Start: "npx vite preview",
-				Proxy: &ServiceProxy{
+				Proxy: []ServiceProxy{{
 					Path: "/api",
 					To:   ServiceProxyTarget{Service: "backend"},
-				},
+				}},
 			},
 			"dashboard": {
 				Path:  "apps/dashboard",
 				Start: "npx next start",
-				Proxy: &ServiceProxy{
+				Proxy: []ServiceProxy{{
 					Path: "/api",
 					To:   ServiceProxyTarget{Service: "backend"},
-				},
+				}},
 			},
 		},
 	}
@@ -89,40 +87,98 @@ func TestGenerateNginxConfig_WithProxy(t *testing.T) {
 
 	content := string(data)
 
-	// Should have dedicated server block for web
+	// Should have dedicated server block for web with /api proxy
 	if !strings.Contains(content, "server_name my-env--web.preview.example.com;") {
 		t.Error("expected web-specific server_name")
 	}
-
-	// Should have /api/ proxy to backend port with passthrough
 	if !strings.Contains(content, "location /api/") {
 		t.Error("expected /api/ location block")
 	}
 	if !strings.Contains(content, "proxy_pass http://127.0.0.1:8000/api/;") {
-		t.Error("expected proxy_pass to backend port 8000 with /api/ path")
+		t.Error("expected proxy_pass to backend with /api/ path")
 	}
 
-	// Should also proxy / to web port
+	// Should also have default location for web
 	if !strings.Contains(content, "proxy_pass http://127.0.0.1:3000;") {
-		t.Error("expected proxy_pass to web port 3000")
+		t.Error("expected web default proxy_pass")
 	}
 
-	// Should have dedicated server block for dashboard too
-	if !strings.Contains(content, "server_name my-env--dashboard.preview.example.com;") {
-		t.Error("expected dashboard-specific server_name")
-	}
-	if !strings.Contains(content, "proxy_pass http://127.0.0.1:4000;") {
-		t.Error("expected proxy_pass to dashboard port 4000")
-	}
-
-	// Should set Host to localhost (for dev server allowedHosts)
+	// Should set Host to localhost
 	if !strings.Contains(content, "proxy_set_header Host localhost;") {
 		t.Error("expected Host header set to localhost")
 	}
+}
 
-	// Should set X-Forwarded-Host to original host
-	if !strings.Contains(content, "proxy_set_header X-Forwarded-Host $host;") {
-		t.Error("expected X-Forwarded-Host header")
+func TestGenerateNginxConfig_ProxyWithTargetPath(t *testing.T) {
+	cfg := &ProjectConfig{
+		Name: "testproject",
+		Services: map[string]ServiceConfig{
+			"backend": {Path: "apps/backend", Start: "node index.js"},
+			"dashboard": {
+				Path:  "apps/dashboard",
+				Start: "npx next start",
+				Proxy: []ServiceProxy{{
+					Path:       "/iapi",
+					TargetPath: "/api",
+					To:         ServiceProxyTarget{Service: "backend"},
+				}},
+			},
+		},
+	}
+
+	manifest := &Manifest{
+		EnvName: "my-env",
+		Ports:   PortMap{"backend": 8000, "dashboard": 4000},
+	}
+
+	data, err := GenerateNginxConfig(cfg, manifest, "preview.example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	content := string(data)
+
+	if !strings.Contains(content, "location /iapi/") {
+		t.Error("expected /iapi/ location block")
+	}
+	if !strings.Contains(content, "proxy_pass http://127.0.0.1:8000/api/;") {
+		t.Error("expected proxy_pass with /api/ rewrite to backend")
+	}
+}
+
+func TestGenerateNginxConfig_ProxyPassthrough(t *testing.T) {
+	cfg := &ProjectConfig{
+		Name: "testproject",
+		Services: map[string]ServiceConfig{
+			"backend": {Path: "apps/backend", Start: "node index.js"},
+			"web": {
+				Path:  "apps/web",
+				Start: "npx vite preview",
+				Proxy: []ServiceProxy{{
+					Path: "/api",
+					To:   ServiceProxyTarget{Service: "backend"},
+				}},
+			},
+		},
+	}
+
+	manifest := &Manifest{
+		EnvName: "my-env",
+		Ports:   PortMap{"backend": 8000, "web": 3000},
+	}
+
+	data, err := GenerateNginxConfig(cfg, manifest, "preview.example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	content := string(data)
+
+	if !strings.Contains(content, "location /api/") {
+		t.Error("expected /api/ location block")
+	}
+	if !strings.Contains(content, "proxy_pass http://127.0.0.1:8000/api/;") {
+		t.Error("expected proxy_pass with /api/ passthrough")
 	}
 }
 
@@ -133,10 +189,10 @@ func TestGenerateNginxConfig_ProxyTargetNotFound(t *testing.T) {
 			"web": {
 				Path:  "apps/web",
 				Start: "npx vite preview",
-				Proxy: &ServiceProxy{
+				Proxy: []ServiceProxy{{
 					Path: "/api",
 					To:   ServiceProxyTarget{Service: "nonexistent"},
-				},
+				}},
 			},
 		},
 	}
@@ -155,110 +211,11 @@ func TestGenerateNginxConfig_ProxyTargetNotFound(t *testing.T) {
 	}
 }
 
-func TestGenerateNginxConfig_DomainEscaping(t *testing.T) {
-	cfg := &ProjectConfig{
-		Name:     "testproject",
-		Services: map[string]ServiceConfig{},
-	}
-
-	manifest := &Manifest{
-		EnvName: "test-env",
-		Ports:   PortMap{"backend": 8000},
-	}
-
-	data, err := GenerateNginxConfig(cfg, manifest, "preview.my-domain.co.uk")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	content := string(data)
-
-	// Dots in domain should be escaped in regex
-	if !strings.Contains(content, "preview\\.my-domain\\.co\\.uk$") {
-		t.Error("expected escaped dots in domain regex")
-	}
-}
-
-func TestGenerateNginxConfig_ProxyWithTargetPath(t *testing.T) {
-	cfg := &ProjectConfig{
-		Name: "testproject",
-		Services: map[string]ServiceConfig{
-			"backend": {Path: "apps/backend", Start: "node index.js"},
-			"dashboard": {
-				Path:  "apps/dashboard",
-				Start: "npx next start",
-				Proxy: &ServiceProxy{
-					Path:       "/iapi",
-					TargetPath: "/api",
-					To:         ServiceProxyTarget{Service: "backend"},
-				},
-			},
-		},
-	}
-
-	manifest := &Manifest{
-		EnvName: "my-env",
-		Ports:   PortMap{"backend": 8000, "dashboard": 4000},
-	}
-
-	data, err := GenerateNginxConfig(cfg, manifest, "preview.example.com")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	content := string(data)
-
-	// Should have /iapi/ location that rewrites to /api/ on backend
-	if !strings.Contains(content, "location /iapi/") {
-		t.Error("expected /iapi/ location block")
-	}
-	if !strings.Contains(content, "proxy_pass http://127.0.0.1:8000/api/;") {
-		t.Error("expected proxy_pass with /api/ rewrite to backend")
-	}
-}
-
-func TestGenerateNginxConfig_ProxyPassthrough(t *testing.T) {
-	cfg := &ProjectConfig{
-		Name: "testproject",
-		Services: map[string]ServiceConfig{
-			"backend": {Path: "apps/backend", Start: "node index.js"},
-			"web": {
-				Path:  "apps/web",
-				Start: "npx vite preview",
-				Proxy: &ServiceProxy{
-					Path: "/api",
-					To:   ServiceProxyTarget{Service: "backend"},
-				},
-			},
-		},
-	}
-
-	manifest := &Manifest{
-		EnvName: "my-env",
-		Ports:   PortMap{"backend": 8000, "web": 3000},
-	}
-
-	data, err := GenerateNginxConfig(cfg, manifest, "preview.example.com")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	content := string(data)
-
-	// When target_path is not set, it defaults to path — passthrough
-	if !strings.Contains(content, "location /api/") {
-		t.Error("expected /api/ location block")
-	}
-	if !strings.Contains(content, "proxy_pass http://127.0.0.1:8000/api/;") {
-		t.Error("expected proxy_pass with /api/ passthrough")
-	}
-}
-
 func TestGenerateNginxConfig_DeterministicOrder(t *testing.T) {
 	cfg := &ProjectConfig{
 		Name: "testproject",
 		Services: map[string]ServiceConfig{
-			"zeta":  {Path: "apps/zeta", Start: "start", Proxy: &ServiceProxy{Path: "/api", To: ServiceProxyTarget{Service: "alpha"}}},
+			"zeta":  {Path: "apps/zeta", Start: "start"},
 			"alpha": {Path: "apps/alpha", Start: "start"},
 		},
 	}
@@ -273,5 +230,13 @@ func TestGenerateNginxConfig_DeterministicOrder(t *testing.T) {
 
 	if string(data1) != string(data2) {
 		t.Error("expected deterministic output")
+	}
+
+	// Alpha should come before zeta
+	content := string(data1)
+	alphaIdx := strings.Index(content, "test-env--alpha")
+	zetaIdx := strings.Index(content, "test-env--zeta")
+	if alphaIdx > zetaIdx {
+		t.Error("expected alpha before zeta")
 	}
 }

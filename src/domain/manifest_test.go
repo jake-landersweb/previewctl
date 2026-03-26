@@ -39,7 +39,7 @@ func TestBuildManifest_ResolvesTemplates(t *testing.T) {
 		"postgres": {"CONNECTION_STRING": "postgresql://localhost:5432/test"},
 	}
 
-	m, err := BuildManifest(cfg, "pr-42", "feat/auth", "local", ports, provOutputs)
+	m, err := BuildManifest(cfg, "pr-42", "feat/auth", "local", ports, provOutputs, nil)
 	if err != nil {
 		t.Fatalf("BuildManifest error: %v", err)
 	}

@@ -106,7 +106,7 @@ type ServiceConfig struct {
 	EnvFile   string            `yaml:"env_file,omitempty"` // relative to path, defaults to ".env.local"
 	Build     string            `yaml:"build,omitempty"`    // build command (run on host before container starts)
 	Start     string            `yaml:"start,omitempty"`    // start command (run inside container). Required for compose generation.
-	Proxy     *ServiceProxy     `yaml:"proxy,omitempty"`    // optional reverse proxy rule for nginx
+	Proxy     []ServiceProxy    `yaml:"proxy,omitempty"`    // optional reverse proxy rules for nginx
 }
 
 // ServiceProxy defines a reverse proxy rule on a service's subdomain.
@@ -277,7 +277,7 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 			if overlaySvc.Start != "" {
 				baseSvc.Start = overlaySvc.Start
 			}
-			if overlaySvc.Proxy != nil {
+			if len(overlaySvc.Proxy) > 0 {
 				baseSvc.Proxy = overlaySvc.Proxy
 			}
 			if overlaySvc.Env != nil {

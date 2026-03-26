@@ -174,6 +174,10 @@ func (m *Manager) step(ctx context.Context, entry *EnvironmentEntry, opts StepOp
 			Machine:    rec.Machine,
 			DurationMs: rec.DurationMs,
 		})
+		// Reload store values from state in case a hook subprocess wrote to them
+		if latest, err := m.state.GetEnvironment(ctx, entry.Name); err == nil && latest != nil && latest.Env != nil {
+			entry.Env = latest.Env
+		}
 		if err := m.state.SetEnvironment(ctx, entry.Name, entry); err != nil {
 			return fmt.Errorf("persisting step checkpoint: %w", err)
 		}
@@ -476,7 +480,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			CompleteMsg: &beforeMsg,
 			Fn: func() error {
 				m.progress.OnStep(StepEvent{Step: "provisioner_before", Status: StepStreaming, Message: fmt.Sprintf("Running provisioner.before → %s", m.config.Provisioner.Before)})
-				env := m.buildHookEnv(envName, existingWorktree, nil)
+				env := m.buildHookEnv(envName, existingWorktree, nil, entry.Env)
 				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot, m.progress.StderrWriter())
 				return err
 			},
@@ -501,7 +505,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			CompleteMsg: &createMsg,
 			Fn: func() error {
 				m.progress.OnStep(StepEvent{Step: "create_compute", Status: StepStreaming, Message: "Creating remote compute..."})
-				env := m.buildHookEnv(envName, "", nil)
+				env := m.buildHookEnv(envName, "", nil, entry.Env)
 				env = append(env, fmt.Sprintf("PREVIEWCTL_BRANCH=%s", branch))
 				var err error
 				computeOutputs, err = ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Create,
@@ -656,7 +660,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 		CompleteMsg: msg("Manifest built"),
 		Fn: func() error {
 			var err error
-			manifest, err = BuildManifest(m.config, envName, branch, mode, ports, provisionerOutputs)
+			manifest, err = BuildManifest(m.config, envName, branch, mode, ports, provisionerOutputs, entry.Env)
 			return err
 		},
 	}); err != nil {
@@ -665,7 +669,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 	// If build_manifest was skipped, we still need the manifest object
 	if manifest == nil {
 		var err error
-		manifest, err = BuildManifest(m.config, envName, branch, mode, ports, provisionerOutputs)
+		manifest, err = BuildManifest(m.config, envName, branch, mode, ports, provisionerOutputs, entry.Env)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("rebuilding manifest after cache: %w", err)
 		}
@@ -696,7 +700,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			CompleteMsg: &afterMsg,
 			Fn: func() error {
 				m.progress.OnStep(StepEvent{Step: "provisioner_after", Status: StepStreaming, Message: fmt.Sprintf("Running provisioner.after → %s", m.config.Provisioner.After)})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
+				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports, entry.Env)
 				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.After, nil, env, m.projectRoot, m.progress.StderrWriter())
 				return err
 			},
@@ -721,7 +725,7 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 	// Runs directly (not via step()) so it always executes — the point is to pull fresh code.
 	if entry != nil && entry.StepCompleted("runner_before") {
 		m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepStarted, Message: fmt.Sprintf("Syncing code to origin/%s...", branch)})
-		syncCmd := fmt.Sprintf("git fetch origin && git reset --hard origin/%s", branch)
+		syncCmd := fmt.Sprintf("git fetch --depth 1 origin %s && git reset --hard origin/%s", branch, branch)
 		if _, err := ca.Exec(ctx, syncCmd, nil); err != nil {
 			m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepFailed, Message: err.Error()})
 			return nil, fmt.Errorf("syncing code: %w", err)
@@ -738,7 +742,7 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 			CompleteMsg: &beforeMsg,
 			Fn: func() error {
 				m.progress.OnStep(StepEvent{Step: "runner_before", Status: StepStreaming, Message: fmt.Sprintf("Running runner.before → %s", m.config.Runner.Before)})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
+				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports, entry.Env)
 				_, err := ca.Exec(ctx, m.config.Runner.Before, env)
 				return err
 			},
@@ -901,7 +905,7 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 			CompleteMsg: &deployMsg,
 			Fn: func() error {
 				m.progress.OnStep(StepEvent{Step: "runner_deploy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.deploy → %s", m.config.Runner.Deploy)})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
+				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports, entry.Env)
 				_, err := ca.Exec(ctx, m.config.Runner.Deploy, env)
 				return err
 			},
@@ -919,7 +923,7 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 			CompleteMsg: &afterMsg,
 			Fn: func() error {
 				m.progress.OnStep(StepEvent{Step: "runner_after", Status: StepStreaming, Message: fmt.Sprintf("Running runner.after → %s", m.config.Runner.After)})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
+				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports, entry.Env)
 				_, err := ca.Exec(ctx, m.config.Runner.After, env)
 				return err
 			},
@@ -995,7 +999,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 			&destroyMsg,
 			func() error {
 				m.progress.OnStep(StepEvent{Step: "runner_destroy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.destroy → %s", m.config.Runner.Destroy)})
-				env := m.buildHookEnv(envName, ca.Root(), entry.Ports)
+				env := m.buildHookEnv(envName, ca.Root(), entry.Ports, entry.Env)
 				_, err := ca.Exec(ctx, m.config.Runner.Destroy, env)
 				return err
 			}); err != nil {
@@ -1095,6 +1099,11 @@ func (m *Manager) GetEnvironment(ctx context.Context, envName string) (*Environm
 	return m.state.GetEnvironment(ctx, envName)
 }
 
+// SaveEnvironment persists an environment entry to state.
+func (m *Manager) SaveEnvironment(ctx context.Context, envName string, entry *EnvironmentEntry) error {
+	return m.state.SetEnvironment(ctx, envName, entry)
+}
+
 func (m *Manager) Status(ctx context.Context, envName string) (*EnvironmentDetail, error) {
 	entry, err := m.state.GetEnvironment(ctx, envName)
 	if err != nil {
@@ -1162,12 +1171,13 @@ func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName stri
 	return ExecuteCoreHook(ctx, hookScript, requiredOutputs, env, m.projectRoot, m.progress.StderrWriter())
 }
 
-func (m *Manager) buildHookEnv(envName, worktreePath string, ports PortMap) []string {
+func (m *Manager) buildHookEnv(envName, worktreePath string, ports PortMap, envStore ...map[string]string) []string {
 	env := append(os.Environ(),
 		fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
 		fmt.Sprintf("PREVIEWCTL_ENVIRONMENT_NAME=%s", SanitizeName(envName)),
 		fmt.Sprintf("PREVIEWCTL_PROJECT_NAME=%s", m.config.Name),
 		fmt.Sprintf("PREVIEWCTL_PROJECT_ROOT=%s", m.projectRoot),
+		fmt.Sprintf("PREVIEWCTL_MODE=%s", m.config.Mode),
 	)
 	if worktreePath != "" {
 		env = append(env, fmt.Sprintf("PREVIEWCTL_WORKTREE_PATH=%s", worktreePath))
@@ -1175,6 +1185,13 @@ func (m *Manager) buildHookEnv(envName, worktreePath string, ports PortMap) []st
 	for name, port := range ports {
 		env = append(env, fmt.Sprintf("PREVIEWCTL_PORT_%s=%d",
 			strings.ToUpper(strings.ReplaceAll(name, "-", "_")), port))
+	}
+	// Inject persistent store values as PREVIEWCTL_STORE_{KEY}
+	if len(envStore) > 0 && envStore[0] != nil {
+		for k, v := range envStore[0] {
+			env = append(env, fmt.Sprintf("PREVIEWCTL_STORE_%s=%s",
+				strings.ToUpper(strings.ReplaceAll(k, "-", "_")), v))
+		}
 	}
 	return env
 }

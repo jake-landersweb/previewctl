@@ -20,9 +20,9 @@ services:
     build: pnpm turbo build --filter=web
     start: npx vite preview
     proxy:
-      path: /api
-      to:
-        service: backend
+      - path: /api
+        to:
+          service: backend
     env:
       PORT: "3000"
   types:
@@ -54,14 +54,14 @@ services:
 	if web.Start != "npx vite preview" {
 		t.Errorf("expected web start command, got '%s'", web.Start)
 	}
-	if web.Proxy == nil {
+	if len(web.Proxy) == 0 {
 		t.Fatal("expected web to have proxy config")
 	}
-	if web.Proxy.Path != "/api" {
-		t.Errorf("expected proxy path '/api', got '%s'", web.Proxy.Path)
+	if web.Proxy[0].Path != "/api" {
+		t.Errorf("expected proxy path '/api', got '%s'", web.Proxy[0].Path)
 	}
-	if web.Proxy.To.Service != "backend" {
-		t.Errorf("expected proxy target 'backend', got '%s'", web.Proxy.To.Service)
+	if web.Proxy[0].To.Service != "backend" {
+		t.Errorf("expected proxy target 'backend', got '%s'", web.Proxy[0].To.Service)
 	}
 
 	// Types — no build or start
@@ -185,10 +185,10 @@ func TestDeepMergeConfig_ServiceBuildStartProxy(t *testing.T) {
 			"web": {
 				Build: "pnpm build",
 				Start: "npx vite preview",
-				Proxy: &ServiceProxy{
+				Proxy: []ServiceProxy{{
 					Path: "/api",
 					To:   ServiceProxyTarget{Service: "backend"},
-				},
+				}},
 			},
 		},
 	}
@@ -210,10 +210,10 @@ func TestDeepMergeConfig_ServiceBuildStartProxy(t *testing.T) {
 	}
 
 	// Web should have proxy from overlay
-	if base.Services["web"].Proxy == nil {
+	if len(base.Services["web"].Proxy) == 0 {
 		t.Fatal("expected web proxy from overlay")
 	}
-	if base.Services["web"].Proxy.Path != "/api" {
+	if base.Services["web"].Proxy[0].Path != "/api" {
 		t.Error("expected web proxy path from overlay")
 	}
 }

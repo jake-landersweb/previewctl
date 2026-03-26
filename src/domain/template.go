@@ -14,7 +14,8 @@ type TemplateContext struct {
 	InfraPorts         PortMap
 	ProvisionerOutputs map[string]map[string]string
 	CurrentService     string // set per-service during rendering, enables {{self.port}}
-	EnvName            string // environment name, enables {{env.name}}
+	EnvName            string            // environment name, enables {{env.name}}
+	Store              map[string]string // persistent key-value store, enables {{store.KEY}}
 }
 
 // RenderTemplate replaces {{var}} placeholders in a string with values from the context.
@@ -23,6 +24,7 @@ type TemplateContext struct {
 //   - {{infrastructure.<name>.port}} — allocated port for an infrastructure service
 //   - {{provisioner.<service>.<OUTPUT>}} — output value from a provisioner service
 //   - {{env.name}} — the current environment name
+//   - {{store.<key>}} — value from the persistent key-value store
 func RenderTemplate(tmpl string, ctx *TemplateContext) (string, error) {
 	var renderErr error
 
@@ -109,6 +111,18 @@ func resolveVar(parts []string, ctx *TemplateContext) (string, error) {
 			return "", fmt.Errorf("env.name not available in this context")
 		}
 		return ctx.EnvName, nil
+
+	case "store":
+		if len(parts) != 2 {
+			return "", fmt.Errorf("expected store.<key>, got %s", strings.Join(parts, "."))
+		}
+		key := parts[1]
+		if ctx.Store != nil {
+			if val, ok := ctx.Store[key]; ok {
+				return val, nil
+			}
+		}
+		return "", fmt.Errorf("store variable '%s' not found (set it with 'previewctl env set')", key)
 
 	case "provisioner":
 		return resolveProvisionerVar(parts[1:], ctx)

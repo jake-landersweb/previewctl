@@ -40,11 +40,12 @@ type ComputeResources struct {
 // ComputeAccessInfo stores how to reach the compute location so environments
 // can be reconnected across CLI invocations.
 type ComputeAccessInfo struct {
-	Type            string `json:"type"`                      // "local" or "ssh"
-	Path            string `json:"path,omitempty"`            // local worktree path
-	Host            string `json:"host,omitempty"`            // VM IP (ssh)
-	User            string `json:"user,omitempty"`            // SSH user
-	ManagedWorktree bool   `json:"managedWorktree,omitempty"` // true = created by previewctl
+	Type            string            `json:"type"`                      // "local" or "ssh"
+	Path            string            `json:"path,omitempty"`            // local worktree path or remote root
+	Host            string            `json:"host,omitempty"`            // VM hostname (ssh)
+	User            string            `json:"user,omitempty"`            // SSH user
+	ManagedWorktree bool              `json:"managedWorktree,omitempty"` // true = created by previewctl
+	Metadata        map[string]string `json:"metadata,omitempty"`        // hook-provided metadata (e.g., "vm_zone", "gcp_project")
 }
 
 // SanitizeName replaces characters not safe for use in database names, file paths,
@@ -127,8 +128,26 @@ type EnvironmentEntry struct {
 	Ports              PortMap                      `json:"ports"`
 	ProvisionerOutputs map[string]map[string]string `json:"provisionerOutputs"`
 	Compute            *ComputeAccessInfo           `json:"compute,omitempty"`
+	Env                map[string]string            `json:"env,omitempty"` // persistent key-value store for hooks
 	Steps              map[string]*StepRecord       `json:"steps,omitempty"`
 	AuditLog           []AuditEntry                 `json:"auditLog,omitempty"`
+}
+
+// SetEnv sets a key-value pair in the environment's persistent store.
+func (e *EnvironmentEntry) SetEnv(key, value string) {
+	if e.Env == nil {
+		e.Env = make(map[string]string)
+	}
+	e.Env[key] = value
+}
+
+// GetEnv reads a value from the environment's persistent store.
+func (e *EnvironmentEntry) GetEnv(key string) (string, bool) {
+	if e.Env == nil {
+		return "", false
+	}
+	v, ok := e.Env[key]
+	return v, ok
 }
 
 // WorktreePath returns the worktree path from ComputeAccessInfo, or empty string.

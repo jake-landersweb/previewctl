@@ -59,8 +59,32 @@ func GenerateComposeFile(cfg *ProjectConfig, manifest *Manifest) ([]byte, error)
 	}
 	sort.Strings(svcNames)
 
+	// Build template context for resolving {{self.port}} etc. in start commands
+	servicePorts := make(PortMap)
+	infraPorts := make(PortMap)
+	for pName, port := range manifest.Ports {
+		if _, ok := cfg.Services[pName]; ok {
+			servicePorts[pName] = port
+		} else {
+			infraPorts[pName] = port
+		}
+	}
+
 	for _, name := range svcNames {
 		svc := cfg.Services[name]
+
+		// Resolve template variables in start command
+		tmplCtx := &TemplateContext{
+			ServicePorts:       servicePorts,
+			InfraPorts:         infraPorts,
+			ProvisionerOutputs: manifest.ProvisionerOutputs,
+			EnvName:            manifest.EnvName,
+			CurrentService:     name,
+		}
+		startCmd, err := RenderTemplate(svc.Start, tmplCtx)
+		if err != nil {
+			return nil, fmt.Errorf("rendering start command for '%s': %w", name, err)
+		}
 
 		// Build env_file paths
 		envFile := filepath.Join(svc.Path, ".env")
@@ -72,7 +96,7 @@ func GenerateComposeFile(cfg *ProjectConfig, manifest *Manifest) ([]byte, error)
 		b.WriteString("      - .:/app\n")
 		b.WriteString("    network_mode: host\n")
 		fmt.Fprintf(&b, "    working_dir: /app/%s\n", svc.Path)
-		fmt.Fprintf(&b, "    command: %s\n", svc.Start)
+		fmt.Fprintf(&b, "    command: %s\n", startCmd)
 		b.WriteString("    env_file:\n")
 		fmt.Fprintf(&b, "      - %s\n", envFile)
 		fmt.Fprintf(&b, "      - %s\n", envLocalFile)

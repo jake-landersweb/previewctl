@@ -57,6 +57,7 @@ func Execute() {
 		newSSHCmd(),
 		newServiceCmd(),
 		newStepCmd(),
+		newStoreCmd(),
 		newCleanCmd(),
 		newMigrateCmd(),
 		newVersionCmd(),

@@ -40,6 +40,7 @@ func BuildManifest(
 	envName, branch, mode string,
 	ports PortMap,
 	provisionerOutputs map[string]map[string]string,
+	store map[string]string,
 ) (*Manifest, error) {
 	// Split ports into service and infrastructure
 	servicePorts := make(PortMap)
@@ -57,6 +58,7 @@ func BuildManifest(
 		InfraPorts:         infraPorts,
 		ProvisionerOutputs: provisionerOutputs,
 		EnvName:            envName,
+		Store:              store,
 	}
 
 	// Resolve env vars for each service
