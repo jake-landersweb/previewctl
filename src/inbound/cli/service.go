@@ -75,6 +75,12 @@ func newServiceStartCmd() *cobra.Command {
 				return err
 			}
 
+			// Regenerate nginx config and reload so the 503 block becomes a proxy block
+			if err := refreshNginxProxy(cmd); err != nil {
+				fmt.Fprintf(os.Stderr, "  %s Warning: nginx refresh failed: %v\n",
+					styleDim.Render("·"), err)
+			}
+
 			Success(fmt.Sprintf("Service %s started", styleDetail.Render(svcName)))
 			return nil
 		},
@@ -109,6 +115,12 @@ func newServiceStopCmd() *cobra.Command {
 			// Track as disabled
 			if err := trackServiceDisabled(cmd, svcName); err != nil {
 				return err
+			}
+
+			// Regenerate nginx config and reload so the proxy block becomes a 503 block
+			if err := refreshNginxProxy(cmd); err != nil {
+				fmt.Fprintf(os.Stderr, "  %s Warning: nginx refresh failed: %v\n",
+					styleDim.Render("·"), err)
 			}
 
 			Success(fmt.Sprintf("Service %s stopped", styleDetail.Render(svcName)))
@@ -366,6 +378,32 @@ func trackServiceEnabled(cmd *cobra.Command, svcName string) error {
 	}
 	entry.EnableService(svcName)
 	return mgr.SaveEnvironment(cmd.Context(), envName, entry)
+}
+
+// refreshNginxProxy re-runs the generate_nginx step and restarts the nginx
+// container so that service start/stop changes are reflected immediately.
+func refreshNginxProxy(cmd *cobra.Command) error {
+	envName := globalEnvName
+	mgr, _, err := buildManager(nil)
+	if err != nil {
+		return err
+	}
+
+	// Re-run the generate_nginx step to regenerate the config
+	if err := mgr.RunStep(cmd.Context(), envName, "generate_nginx"); err != nil {
+		return fmt.Errorf("regenerating nginx config: %w", err)
+	}
+
+	// Reload nginx config without downtime
+	ca, _, err := resolveRemoteEnv(cmd)
+	if err != nil {
+		return fmt.Errorf("resolving environment: %w", err)
+	}
+	if _, err := ca.Exec(cmd.Context(), "docker compose -f .previewctl.compose.yaml exec nginx nginx -s reload", nil); err != nil {
+		return fmt.Errorf("reloading nginx: %w", err)
+	}
+
+	return nil
 }
 
 // trackServiceDisabled removes a service from the environment's enabled set and persists.
