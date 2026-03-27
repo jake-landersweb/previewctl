@@ -390,17 +390,19 @@ func refreshNginxProxy(cmd *cobra.Command) error {
 	}
 
 	// Re-run the generate_nginx step to regenerate the config
+	Header("Regenerating nginx config")
 	if err := mgr.RunStep(cmd.Context(), envName, "generate_nginx"); err != nil {
 		return fmt.Errorf("regenerating nginx config: %w", err)
 	}
 
-	// Reload nginx config without downtime
+	// Restart nginx container to pick up the new config
+	Header("Restarting nginx proxy")
 	ca, _, err := resolveRemoteEnv(cmd)
 	if err != nil {
 		return fmt.Errorf("resolving environment: %w", err)
 	}
-	if _, err := ca.Exec(cmd.Context(), "docker compose -f .previewctl.compose.yaml exec nginx nginx -s reload", nil); err != nil {
-		return fmt.Errorf("reloading nginx: %w", err)
+	if _, err := ca.Exec(cmd.Context(), "docker compose -f .previewctl.compose.yaml restart nginx", nil); err != nil {
+		return fmt.Errorf("restarting nginx: %w", err)
 	}
 
 	return nil
