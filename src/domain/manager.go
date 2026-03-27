@@ -1037,7 +1037,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 			&destroyMsg,
 			func() error {
 				m.progress.OnStep(StepEvent{Step: fmt.Sprintf("destroy_core_%s", svcName), Status: StepStreaming, Message: fmt.Sprintf("Running destroy hook for %s...", svcName)})
-				_, err := m.runCoreHook(ctx, svcName, "destroy", envName, entry.Ports)
+				_, err := m.runCoreHook(ctx, svcName, "destroy", envName, entry.Ports, entry.Env)
 				return err
 			}); err != nil {
 			return fmt.Errorf("destroying provisioner service %s: %w", svcName, err)
@@ -1049,7 +1049,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 		destroyMsg := "Compute destroyed via hook"
 		if err := m.stepSimple(ctx, "destroy_compute_hook", "Destroying remote compute...", &destroyMsg, func() error {
 			m.progress.OnStep(StepEvent{Step: "destroy_compute_hook", Status: StepStreaming, Message: "Destroying remote compute..."})
-			env := m.buildHookEnv(envName, "", entry.Ports)
+			env := m.buildHookEnv(envName, "", entry.Ports, entry.Env)
 			if entry.Compute != nil {
 				env = append(env,
 					fmt.Sprintf("PREVIEWCTL_VM_IP=%s", entry.Compute.Host),
@@ -1152,7 +1152,7 @@ func (m *Manager) RunCoreHook(ctx context.Context, svcName, action, envName stri
 	return m.runCoreHook(ctx, svcName, action, envName, ports)
 }
 
-func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName string, ports PortMap) (map[string]string, error) {
+func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName string, ports PortMap, store ...map[string]string) (map[string]string, error) {
 	svc, ok := m.config.Provisioner.Services[svcName]
 	if !ok {
 		return nil, fmt.Errorf("unknown provisioner service '%s'", svcName)
@@ -1182,6 +1182,13 @@ func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName stri
 	for name, port := range ports {
 		env = append(env, fmt.Sprintf("PREVIEWCTL_PORT_%s=%d",
 			strings.ToUpper(strings.ReplaceAll(name, "-", "_")), port))
+	}
+	// Inject persistent store values
+	if len(store) > 0 && store[0] != nil {
+		for k, v := range store[0] {
+			env = append(env, fmt.Sprintf("PREVIEWCTL_STORE_%s=%s",
+				strings.ToUpper(strings.ReplaceAll(k, "-", "_")), v))
+		}
 	}
 	var requiredOutputs []string
 	if action == "seed" || action == "reset" {
