@@ -20,6 +20,7 @@ type Manifest struct {
 	ProvisionerOutputs map[string]map[string]string `json:"provisioner_outputs,omitempty"`
 	Services           map[string]ManifestService   `json:"services,omitempty"`
 	Infrastructure     *ManifestInfrastructure      `json:"infrastructure,omitempty"`
+	EnabledServices    []string                     `json:"enabled_services,omitempty"`
 }
 
 // ManifestService describes a service with fully resolved env vars.

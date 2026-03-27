@@ -33,8 +33,9 @@ func TestGenerateNginxConfig_Basic(t *testing.T) {
 	if !strings.Contains(content, "server_name test-env--web.preview.example.com;") {
 		t.Error("expected web server_name")
 	}
-	if !strings.Contains(content, "server_name test-env--redis.preview.example.com;") {
-		t.Error("expected redis server_name")
+	// Redis is an infrastructure service (not in cfg.Services), should NOT get a server block
+	if strings.Contains(content, "server_name test-env--redis.preview.example.com;") {
+		t.Error("redis is infra, should not have a server block")
 	}
 
 	// Should have health check

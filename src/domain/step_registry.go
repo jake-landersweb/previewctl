@@ -195,7 +195,7 @@ func (r *stepRegistry) generateNginx(ctx context.Context) StepOpts {
 	manifest := r.manifest
 	return StepOpts{
 		Name:        "generate_nginx",
-		StartMsg:    "Generating nginx config...",
+		StartMsg:    "Generating nginx config and error pages...",
 		CompleteMsg: msg("nginx config generated"),
 		Fn: func() error {
 			if cfg.Runner == nil || cfg.Runner.Compose == nil || !cfg.Runner.Compose.Proxy.IsEnabled() {
@@ -205,11 +205,25 @@ func (r *stepRegistry) generateNginx(ctx context.Context) StepOpts {
 			if domain == "" {
 				return fmt.Errorf("runner.compose.proxy.domain is required")
 			}
+
+			// Pass enabled services to manifest for nginx generation
+			manifest.EnabledServices = r.enabledServices()
+
 			data, err := GenerateNginxConfig(cfg, manifest, domain)
 			if err != nil {
 				return fmt.Errorf("generating nginx config: %w", err)
 			}
-			return r.ca.WriteFile(ctx, "preview/nginx.conf", data, 0o644)
+			if err := r.ca.WriteFile(ctx, "preview/nginx.conf", data, 0o644); err != nil {
+				return err
+			}
+
+			// Write error pages
+			for filename, content := range GenerateErrorPages(manifest.EnvName) {
+				if err := r.ca.WriteFile(ctx, "preview/error-pages/"+filename, content, 0o644); err != nil {
+					return fmt.Errorf("writing error page %s: %w", filename, err)
+				}
+			}
+			return nil
 		},
 		Verify: func(ctx context.Context) error {
 			if _, err := r.ca.ReadFile(ctx, "preview/nginx.conf"); err != nil {
