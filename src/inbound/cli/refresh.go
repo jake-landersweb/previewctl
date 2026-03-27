@@ -9,6 +9,7 @@ import (
 // refreshSteps defines the steps executed during a refresh, in order.
 var refreshSteps = []string{
 	"sync_code",
+	"generate_manifest",
 	"generate_env",
 	"build_services",
 	"start_services",
@@ -22,11 +23,12 @@ func newRefreshCmd() *cobra.Command {
 		Long: `Refreshes a remote preview environment after code changes. Runs the
 following steps in order:
 
-  1. sync_code       - Pull latest code from the branch
-  2. generate_env    - Regenerate .env files from manifest
-  3. build_services  - Rebuild all enabled services
-  4. start_services  - Restart all enabled services
-  5. generate_nginx  - Regenerate and reload nginx config
+  1. sync_code          - Pull latest code from the branch
+  2. generate_manifest  - Rebuild .previewctl.json from current config
+  3. generate_env       - Regenerate .env files from manifest
+  4. build_services     - Rebuild all enabled services
+  5. start_services     - Restart all enabled services
+  6. generate_nginx     - Regenerate and reload nginx config
 
 This is the standard operation after pushing code to a branch that
 has a preview environment attached.`,

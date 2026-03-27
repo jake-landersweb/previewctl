@@ -9,9 +9,10 @@ import (
 
 // runnerSteps lists valid steps for isolated execution.
 var runnerSteps = map[string]bool{
-	"sync_code":        true,
-	"runner_before":    true,
-	"generate_env":     true,
+	"sync_code":          true,
+	"generate_manifest":  true,
+	"runner_before":      true,
+	"generate_env":       true,
 	"start_infra":      true,
 	"generate_compose": true,
 	"generate_nginx":   true,
@@ -38,8 +39,9 @@ Use --dry-run to show a diff of what would change.
 Use --print to output the full generated content (for generation steps).
 
 Available steps:
-  sync_code        - Pull latest code from remote
-  runner_before    - Re-run the setup hook
+  sync_code          - Pull latest code from remote
+  generate_manifest  - Rebuild .previewctl.json from current config
+  runner_before      - Re-run the setup hook
   generate_env     - Regenerate .env files from manifest
   start_infra      - Restart infrastructure containers
   generate_compose - Regenerate Docker Compose file

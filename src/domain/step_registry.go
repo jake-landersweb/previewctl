@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,8 @@ func (r *stepRegistry) get(ctx context.Context, name string) (StepOpts, error) {
 	switch name {
 	case "sync_code":
 		return r.syncCode(ctx), nil
+	case "generate_manifest":
+		return r.generateManifest(ctx), nil
 	case "runner_before":
 		return r.runnerBefore(ctx), nil
 	case "generate_env":
@@ -62,6 +65,39 @@ func (r *stepRegistry) syncCode(ctx context.Context) StepOpts {
 			syncCmd := fmt.Sprintf("git fetch --depth 1 origin %s && git reset --hard origin/%s", branch, branch)
 			_, err := r.ca.Exec(ctx, syncCmd, nil)
 			return err
+		},
+	}
+}
+
+func (r *stepRegistry) generateManifest(ctx context.Context) StepOpts {
+	cfg := r.m.config
+	entry := r.entry
+	return StepOpts{
+		Name:        "generate_manifest",
+		StartMsg:    "Regenerating manifest...",
+		CompleteMsg: msg("Manifest regenerated"),
+		Fn: func() error {
+			mode := cfg.Mode
+			if mode == "" {
+				mode = "local"
+			}
+			manifest, err := BuildManifest(cfg, r.envName, r.branch, mode, entry.Ports, entry.ProvisionerOutputs, entry.Env)
+			if err != nil {
+				return fmt.Errorf("building manifest: %w", err)
+			}
+			// Preserve enabled services from the entry
+			manifest.EnabledServices = entry.EnabledServices
+
+			data, err := json.MarshalIndent(manifest, "", "  ")
+			if err != nil {
+				return err
+			}
+			if err := r.ca.WriteFile(ctx, ".previewctl.json", data, 0o644); err != nil {
+				return err
+			}
+			// Update the registry's manifest so subsequent steps use the fresh version
+			*r.manifest = *manifest
+			return nil
 		},
 	}
 }
