@@ -24,7 +24,7 @@ func newCreateCmd() *cobra.Command {
 			}
 
 			progress := NewCLIProgressReporter()
-			mgr, _, err := buildManager(progress)
+			mgr, cfg, err := buildManager(progress)
 			if err != nil {
 				return err
 			}
@@ -48,15 +48,27 @@ func newCreateCmd() *cobra.Command {
 				KeyValue("Worktree", wt)
 			}
 
-			SectionHeader("Ports")
-			// Sort port names for consistent output
+			// Show service URLs
+			var domain string
+			if cfg.Runner != nil && cfg.Runner.Compose != nil && cfg.Runner.Compose.Proxy != nil {
+				domain = cfg.Runner.Compose.Proxy.Domain
+			}
+
+			SectionHeader("Services")
 			portNames := make([]string, 0, len(entry.Ports))
 			for name := range entry.Ports {
 				portNames = append(portNames, name)
 			}
 			sort.Strings(portNames)
 			for _, name := range portNames {
-				DetailKeyValue(name, fmt.Sprintf("%d", entry.Ports[name]))
+				port := entry.Ports[name]
+				var url string
+				if domain != "" {
+					url = fmt.Sprintf("https://%s--%s.%s", envName, name, domain)
+				} else {
+					url = fmt.Sprintf("http://localhost:%d", port)
+				}
+				DetailKeyValue(name, url)
 			}
 			fmt.Println()
 
