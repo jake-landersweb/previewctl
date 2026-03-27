@@ -22,7 +22,10 @@ var runnerSteps = map[string]bool{
 }
 
 func newStepCmd() *cobra.Command {
-	var dryRun bool
+	var (
+		dryRun    bool
+		printFlag bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "step <step-name>",
@@ -31,8 +34,8 @@ func newStepCmd() *cobra.Command {
 Useful for regenerating config files, restarting services, or re-running
 migrations without reprovisioning.
 
-Use --dry-run to preview what a step would do (shows generated config
-for generation steps, or describes the action for other steps).
+Use --dry-run to show a diff of what would change.
+Use --print to output the full generated content (for generation steps).
 
 Available steps:
   sync_code        - Pull latest code from remote
@@ -62,6 +65,21 @@ Available steps:
 				return fmt.Errorf("unknown runner step '%s'", stepName)
 			}
 
+			// Print mode: dump full generated content
+			if printFlag {
+				mgr, _, err := buildManager(nil)
+				if err != nil {
+					return err
+				}
+				output, err := mgr.PrintStep(cmd.Context(), envName, stepName)
+				if err != nil {
+					return err
+				}
+				fmt.Fprint(os.Stdout, output)
+				return nil
+			}
+
+			// Dry run mode: show diff
 			if dryRun {
 				mgr, _, err := buildManager(nil)
 				if err != nil {
@@ -81,6 +99,7 @@ Available steps:
 				return nil
 			}
 
+			// Execute mode
 			progress := NewCLIProgressReporter()
 			mgr, _, err := buildManager(progress)
 			if err != nil {
@@ -100,7 +119,8 @@ Available steps:
 		},
 	}
 
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview what the step would do without executing")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show a diff of what would change without executing")
+	cmd.Flags().BoolVar(&printFlag, "print", false, "Print the full generated content to stdout")
 
 	return cmd
 }

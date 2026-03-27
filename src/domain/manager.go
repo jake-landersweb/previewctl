@@ -444,9 +444,15 @@ func (m *Manager) RunStep(ctx context.Context, envName, stepName string) error {
 	return m.step(ctx, entry, opts)
 }
 
-// DryRunStep previews what a step would do without executing it.
-// For generation steps, returns the content that would be written.
-// For other steps, returns a description of what would happen.
+// stepGeneratedFiles maps step names to the files they generate.
+var stepGeneratedFiles = map[string][]string{
+	"generate_compose": {".previewctl.compose.yaml"},
+	"generate_nginx":   {"preview/nginx.conf"},
+}
+
+// DryRunStep shows a diff of what a step would change.
+// For generation steps, compares the current file on the VM with what would be generated.
+// For other steps, describes what would happen.
 func (m *Manager) DryRunStep(ctx context.Context, envName, stepName string) (string, error) {
 	entry, err := m.state.GetEnvironment(ctx, envName)
 	if err != nil {
@@ -460,10 +466,99 @@ func (m *Manager) DryRunStep(ctx context.Context, envName, stepName string) (str
 	if err != nil {
 		return "", err
 	}
-	_ = ca
 
-	switch stepName {
-	case "generate_env":
+	generated, err := m.generateStepContent(manifest, entry, stepName)
+	if err != nil {
+		return "", err
+	}
+
+	// For file-generating steps, show a diff against the current remote content
+	if files, ok := stepGeneratedFiles[stepName]; ok {
+		var out strings.Builder
+		for i, relPath := range files {
+			newContent := ""
+			if i < len(generated) {
+				newContent = generated[i]
+			}
+
+			current, err := ca.ReadFile(ctx, relPath)
+			if err != nil {
+				// File doesn't exist yet — show as all new
+				fmt.Fprintf(&out, "--- %s (does not exist)\n+++ %s (generated)\n", relPath, relPath)
+				for _, line := range strings.Split(strings.TrimRight(newContent, "\n"), "\n") {
+					fmt.Fprintf(&out, "+ %s\n", line)
+				}
+				continue
+			}
+
+			currentStr := string(current)
+			if currentStr == newContent {
+				fmt.Fprintf(&out, "%s: no changes\n", relPath)
+				continue
+			}
+
+			fmt.Fprintf(&out, "--- %s (current)\n+++ %s (generated)\n", relPath, relPath)
+			out.WriteString(unifiedDiff(currentStr, newContent))
+		}
+		return out.String(), nil
+	}
+
+	// For env generation, diff each file
+	if stepName == "generate_env" {
+		envFiles := manifest.EnvFilePaths()
+		var out strings.Builder
+		for relPath, envVars := range envFiles {
+			newContent := string(RenderEnvFileContent(envVars))
+			current, err := ca.ReadFile(ctx, relPath)
+			if err != nil {
+				fmt.Fprintf(&out, "--- %s (does not exist)\n+++ %s (generated)\n", relPath, relPath)
+				for _, line := range strings.Split(strings.TrimRight(newContent, "\n"), "\n") {
+					fmt.Fprintf(&out, "+ %s\n", line)
+				}
+				out.WriteString("\n")
+				continue
+			}
+			currentStr := string(current)
+			if currentStr == newContent {
+				fmt.Fprintf(&out, "%s: no changes\n", relPath)
+				continue
+			}
+			fmt.Fprintf(&out, "--- %s (current)\n+++ %s (generated)\n", relPath, relPath)
+			out.WriteString(unifiedDiff(currentStr, newContent))
+			out.WriteString("\n")
+		}
+		return out.String(), nil
+	}
+
+	// Non-generation steps — describe what would happen
+	if len(generated) > 0 {
+		return generated[0], nil
+	}
+	return fmt.Sprintf("Step '%s' is hook-owned — dry run not available.\n", stepName), nil
+}
+
+// PrintStep generates and returns the full content for a step without executing it.
+func (m *Manager) PrintStep(ctx context.Context, envName, stepName string) (string, error) {
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return "", fmt.Errorf("loading environment: %w", err)
+	}
+	if entry == nil {
+		return "", fmt.Errorf("environment '%s' not found", envName)
+	}
+
+	_, manifest, err := m.loadManifestFromEntry(ctx, entry)
+	if err != nil {
+		return "", err
+	}
+
+	generated, err := m.generateStepContent(manifest, entry, stepName)
+	if err != nil {
+		return "", err
+	}
+
+	// For env generation, include file headers
+	if stepName == "generate_env" {
 		envFiles := manifest.EnvFilePaths()
 		var out strings.Builder
 		for relPath, envVars := range envFiles {
@@ -472,24 +567,35 @@ func (m *Manager) DryRunStep(ctx context.Context, envName, stepName string) (str
 			out.WriteString("\n")
 		}
 		return out.String(), nil
+	}
 
+	return strings.Join(generated, "\n"), nil
+}
+
+// generateStepContent computes the content a step would produce.
+func (m *Manager) generateStepContent(manifest *Manifest, entry *EnvironmentEntry, stepName string) ([]string, error) {
+	switch stepName {
 	case "generate_compose":
 		data, err := GenerateComposeFile(m.config, manifest)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		return string(data), nil
+		return []string{string(data)}, nil
 
 	case "generate_nginx":
 		if m.config.Runner == nil || m.config.Runner.Compose == nil || !m.config.Runner.Compose.Proxy.IsEnabled() {
-			return "# nginx proxy not enabled\n", nil
+			return []string{"# nginx proxy not enabled\n"}, nil
 		}
+		manifest.EnabledServices = entry.EnabledServices
 		domain := m.config.Runner.Compose.Proxy.Domain
 		data, err := GenerateNginxConfig(m.config, manifest, domain)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		return string(data), nil
+		return []string{string(data)}, nil
+
+	case "generate_env":
+		return nil, nil // handled specially by callers
 
 	case "build_services":
 		services := entry.EnabledServices
@@ -505,7 +611,7 @@ func (m *Manager) DryRunStep(ctx context.Context, envName, stepName string) (str
 			}
 			fmt.Fprintf(&out, "  %s: %s\n", svcName, svc.Build)
 		}
-		return out.String(), nil
+		return []string{out.String()}, nil
 
 	case "start_services":
 		services := entry.EnabledServices
@@ -520,7 +626,7 @@ func (m *Manager) DryRunStep(ctx context.Context, envName, stepName string) (str
 		for _, svcName := range services {
 			fmt.Fprintf(&out, "  %s\n", svcName)
 		}
-		return out.String(), nil
+		return []string{out.String()}, nil
 
 	case "start_infra":
 		composeFile := ""
@@ -528,13 +634,44 @@ func (m *Manager) DryRunStep(ctx context.Context, envName, stepName string) (str
 			composeFile = manifest.Infrastructure.ComposeFile
 		}
 		if composeFile == "" {
-			return "No infrastructure compose file configured\n", nil
+			return []string{"No infrastructure compose file configured\n"}, nil
 		}
-		return fmt.Sprintf("Would run: docker compose -f %s up -d\n", composeFile), nil
+		return []string{fmt.Sprintf("Would run: docker compose -f %s up -d\n", composeFile)}, nil
 
 	default:
-		return fmt.Sprintf("Step '%s' is hook-owned — dry run not available. Would execute the step function.\n", stepName), nil
+		return []string{fmt.Sprintf("Step '%s' is hook-owned — preview not available.\n", stepName)}, nil
 	}
+}
+
+// unifiedDiff produces a simple line-based diff showing added/removed lines.
+func unifiedDiff(a, b string) string {
+	aLines := strings.Split(strings.TrimRight(a, "\n"), "\n")
+	bLines := strings.Split(strings.TrimRight(b, "\n"), "\n")
+
+	// Simple LCS-based diff
+	aSet := make(map[string]bool, len(aLines))
+	for _, line := range aLines {
+		aSet[line] = true
+	}
+	bSet := make(map[string]bool, len(bLines))
+	for _, line := range bLines {
+		bSet[line] = true
+	}
+
+	var out strings.Builder
+	// Lines removed (in a but not in b)
+	for _, line := range aLines {
+		if !bSet[line] {
+			fmt.Fprintf(&out, "- %s\n", line)
+		}
+	}
+	// Lines added (in b but not in a)
+	for _, line := range bLines {
+		if !aSet[line] {
+			fmt.Fprintf(&out, "+ %s\n", line)
+		}
+	}
+	return out.String()
 }
 
 // SetStatus updates an environment's status.

@@ -75,12 +75,17 @@ func GenerateComposeFile(cfg *ProjectConfig, manifest *Manifest) ([]byte, error)
 		svc := cfg.Services[name]
 
 		// Resolve template variables in start command
+		var proxyDomain string
+		if cfg.Runner.Compose.Proxy != nil {
+			proxyDomain = cfg.Runner.Compose.Proxy.Domain
+		}
 		tmplCtx := &TemplateContext{
 			ServicePorts:       servicePorts,
 			InfraPorts:         infraPorts,
 			ProvisionerOutputs: manifest.ProvisionerOutputs,
 			EnvName:            manifest.EnvName,
 			CurrentService:     name,
+			ProxyDomain:        proxyDomain,
 		}
 		startCmd, err := RenderTemplate(svc.Start, tmplCtx)
 		if err != nil {

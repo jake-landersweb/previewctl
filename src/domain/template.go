@@ -16,6 +16,7 @@ type TemplateContext struct {
 	CurrentService     string            // set per-service during rendering, enables {{self.port}}
 	EnvName            string            // environment name, enables {{env.name}}
 	Store              map[string]string // persistent key-value store, enables {{store.KEY}}
+	ProxyDomain        string            // proxy domain (e.g., "preview.airgoods.com"), enables {{proxy.*}}
 }
 
 // RenderTemplate replaces {{var}} placeholders in a string with values from the context.
@@ -25,6 +26,8 @@ type TemplateContext struct {
 //   - {{provisioner.<service>.<OUTPUT>}} — output value from a provisioner service
 //   - {{env.name}} — the current environment name
 //   - {{store.<key>}} — value from the persistent key-value store
+//   - {{proxy.url.<service>}} — full URL for a service (https://{env}--{service}.{domain})
+//   - {{proxy.domain}} — the proxy domain (e.g., "preview.airgoods.com")
 func RenderTemplate(tmpl string, ctx *TemplateContext) (string, error) {
 	var renderErr error
 
@@ -123,6 +126,23 @@ func resolveVar(parts []string, ctx *TemplateContext) (string, error) {
 			}
 		}
 		return "", fmt.Errorf("store variable '%s' not found (set it with 'previewctl env set')", key)
+
+	case "proxy":
+		if ctx.ProxyDomain == "" {
+			return "", fmt.Errorf("proxy variables require runner.compose.proxy.domain to be configured")
+		}
+		if len(parts) == 2 && parts[1] == "domain" {
+			return ctx.ProxyDomain, nil
+		}
+		if len(parts) == 3 && parts[1] == "url" {
+			// {{proxy.url.<service>}} — full URL for a specific service
+			svcName := parts[2]
+			if _, ok := ctx.ServicePorts[svcName]; !ok {
+				return "", fmt.Errorf("unknown service '%s' in proxy.url", svcName)
+			}
+			return fmt.Sprintf("https://%s--%s.%s", ctx.EnvName, svcName, ctx.ProxyDomain), nil
+		}
+		return "", fmt.Errorf("expected proxy.domain or proxy.url.<service>, got %s", strings.Join(parts, "."))
 
 	case "provisioner":
 		return resolveProvisionerVar(parts[1:], ctx)

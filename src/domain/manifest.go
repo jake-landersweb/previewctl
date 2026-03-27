@@ -54,12 +54,19 @@ func BuildManifest(
 		}
 	}
 
+	// Resolve proxy domain for {{proxy.*}} templates
+	var proxyDomain string
+	if cfg.Runner != nil && cfg.Runner.Compose != nil && cfg.Runner.Compose.Proxy != nil {
+		proxyDomain = cfg.Runner.Compose.Proxy.Domain
+	}
+
 	tmplCtx := &TemplateContext{
 		ServicePorts:       servicePorts,
 		InfraPorts:         infraPorts,
 		ProvisionerOutputs: provisionerOutputs,
 		EnvName:            envName,
 		Store:              store,
+		ProxyDomain:        proxyDomain,
 	}
 
 	// Resolve env vars for each service
