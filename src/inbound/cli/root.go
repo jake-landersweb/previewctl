@@ -66,7 +66,7 @@ func Execute() {
 // resolveMode determines the deployment mode. Priority:
 //  1. Explicit --mode flag (non-empty)
 //  2. Inferred from stored environment state (when --env is set)
-//  3. Default to "local"
+//  3. Default to "local" (only when --env is not set)
 func resolveMode() (string, error) {
 	if globalMode != "" {
 		return globalMode, nil
@@ -74,9 +74,14 @@ func resolveMode() (string, error) {
 
 	// Try to infer from stored environment
 	if globalEnvName != "" {
-		if mode, err := inferModeFromState(globalEnvName); err == nil && mode != "" {
+		mode, err := inferModeFromState(globalEnvName)
+		if err != nil {
+			return "", fmt.Errorf("looking up environment '%s': %w", globalEnvName, err)
+		}
+		if mode != "" {
 			return mode, nil
 		}
+		return "", fmt.Errorf("environment '%s' not found in local or remote state", globalEnvName)
 	}
 
 	return "local", nil

@@ -231,8 +231,9 @@ func (r *stepRegistry) buildServices(ctx context.Context) StepOpts {
 				return nil
 			}
 			r.m.progress.OnStep(StepEvent{Step: "build_services", Status: StepStreaming})
+			services := r.enabledServices()
 			var cmds []string
-			for _, svcName := range cfg.Runner.Compose.Autostart {
+			for _, svcName := range services {
 				svc, ok := cfg.Services[svcName]
 				if !ok || svc.Build == "" {
 					continue
@@ -258,13 +259,19 @@ func (r *stepRegistry) startServices(ctx context.Context) StepOpts {
 			if cfg.Runner == nil || cfg.Runner.Compose == nil {
 				return nil
 			}
-			var services []string
+			// Seed EnabledServices from autostart on first run
+			services := r.enabledServices()
+			if r.entry != nil && len(r.entry.EnabledServices) == 0 {
+				r.entry.EnabledServices = append([]string{}, services...)
+			}
+
+			var composeServices []string
 			if cfg.Runner.Compose.Proxy.IsEnabled() {
 				proxyType := cfg.Runner.Compose.Proxy.ResolvedType()
-				services = append(services, proxyType)
+				composeServices = append(composeServices, proxyType)
 			}
-			services = append(services, cfg.Runner.Compose.Autostart...)
-			cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml up -d %s", strings.Join(services, " "))
+			composeServices = append(composeServices, services...)
+			cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml up -d %s", strings.Join(composeServices, " "))
 			_, err := r.ca.Exec(ctx, cmd, nil)
 			return err
 		},
@@ -280,6 +287,19 @@ func (r *stepRegistry) startServices(ctx context.Context) StepOpts {
 			return nil
 		},
 	}
+}
+
+// enabledServices returns the list of services to build/start.
+// Uses entry.EnabledServices if populated, falls back to config autostart.
+func (r *stepRegistry) enabledServices() []string {
+	if r.entry != nil && len(r.entry.EnabledServices) > 0 {
+		return r.entry.EnabledServices
+	}
+	cfg := r.m.config
+	if cfg.Runner != nil && cfg.Runner.Compose != nil {
+		return cfg.Runner.Compose.Autostart
+	}
+	return nil
 }
 
 func (r *stepRegistry) runnerDeploy(ctx context.Context) StepOpts {

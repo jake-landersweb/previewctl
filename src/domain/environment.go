@@ -128,7 +128,8 @@ type EnvironmentEntry struct {
 	Ports              PortMap                      `json:"ports"`
 	ProvisionerOutputs map[string]map[string]string `json:"provisionerOutputs"`
 	Compute            *ComputeAccessInfo           `json:"compute,omitempty"`
-	Env                map[string]string            `json:"env,omitempty"` // persistent key-value store for hooks
+	Env                map[string]string            `json:"env,omitempty"`             // persistent key-value store for hooks
+	EnabledServices    []string                     `json:"enabledServices,omitempty"` // services currently enabled (seeded from autostart, updated by service start/stop)
 	Steps              map[string]*StepRecord       `json:"steps,omitempty"`
 	AuditLog           []AuditEntry                 `json:"auditLog,omitempty"`
 }
@@ -148,6 +149,38 @@ func (e *EnvironmentEntry) GetEnv(key string) (string, bool) {
 	}
 	v, ok := e.Env[key]
 	return v, ok
+}
+
+// EnableService adds a service to the enabled set (idempotent).
+func (e *EnvironmentEntry) EnableService(name string) {
+	for _, s := range e.EnabledServices {
+		if s == name {
+			return
+		}
+	}
+	e.EnabledServices = append(e.EnabledServices, name)
+	e.UpdatedAt = time.Now()
+}
+
+// DisableService removes a service from the enabled set.
+func (e *EnvironmentEntry) DisableService(name string) {
+	for i, s := range e.EnabledServices {
+		if s == name {
+			e.EnabledServices = append(e.EnabledServices[:i], e.EnabledServices[i+1:]...)
+			e.UpdatedAt = time.Now()
+			return
+		}
+	}
+}
+
+// IsServiceEnabled returns true if the service is in the enabled set.
+func (e *EnvironmentEntry) IsServiceEnabled(name string) bool {
+	for _, s := range e.EnabledServices {
+		if s == name {
+			return true
+		}
+	}
+	return false
 }
 
 // WorktreePath returns the worktree path from ComputeAccessInfo, or empty string.

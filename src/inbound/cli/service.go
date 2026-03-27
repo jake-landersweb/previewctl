@@ -62,6 +62,11 @@ func newServiceStartCmd() *cobra.Command {
 				return fmt.Errorf("starting service: %w", err)
 			}
 
+			// Track as enabled
+			if err := trackServiceEnabled(cmd, svcName); err != nil {
+				return err
+			}
+
 			Success(fmt.Sprintf("Service %s started", styleDetail.Render(svcName)))
 			return nil
 		},
@@ -84,6 +89,11 @@ func newServiceStopCmd() *cobra.Command {
 			composeCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml stop %s", svcName)
 			if _, err := ca.Exec(cmd.Context(), composeCmd, nil); err != nil {
 				return fmt.Errorf("stopping service: %w", err)
+			}
+
+			// Track as disabled
+			if err := trackServiceDisabled(cmd, svcName); err != nil {
+				return err
 			}
 
 			Success(fmt.Sprintf("Service %s stopped", styleDetail.Render(svcName)))
@@ -229,5 +239,35 @@ func resolveRemoteEnv(cmd *cobra.Command) (domain.ComputeAccess, *domain.Project
 
 	ca := mgr.BuildSSHComputeAccess(entry)
 	return ca, cfg, nil
+}
+
+// trackServiceEnabled adds a service to the environment's enabled set and persists.
+func trackServiceEnabled(cmd *cobra.Command, svcName string) error {
+	envName := globalEnvName
+	mgr, _, err := buildManager(nil)
+	if err != nil {
+		return err
+	}
+	entry, err := mgr.GetEnvironment(cmd.Context(), envName)
+	if err != nil || entry == nil {
+		return nil // best-effort
+	}
+	entry.EnableService(svcName)
+	return mgr.SaveEnvironment(cmd.Context(), envName, entry)
+}
+
+// trackServiceDisabled removes a service from the environment's enabled set and persists.
+func trackServiceDisabled(cmd *cobra.Command, svcName string) error {
+	envName := globalEnvName
+	mgr, _, err := buildManager(nil)
+	if err != nil {
+		return err
+	}
+	entry, err := mgr.GetEnvironment(cmd.Context(), envName)
+	if err != nil || entry == nil {
+		return nil // best-effort
+	}
+	entry.DisableService(svcName)
+	return mgr.SaveEnvironment(cmd.Context(), envName, entry)
 }
 
