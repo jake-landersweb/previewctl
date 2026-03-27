@@ -8,6 +8,8 @@ import (
 )
 
 func newReconcileCmd() *cobra.Command {
+	var dryRun bool
+
 	cmd := &cobra.Command{
 		Use:   "reconcile",
 		Short: "Verify and heal runner steps for an environment",
@@ -16,8 +18,7 @@ re-executes any that fail verification. Hook-owned steps (runner_before,
 runner_deploy, runner_after) are skipped since previewctl cannot verify
 user-defined hooks.
 
-Use this to recover from out-of-band changes like deleted config files,
-stopped containers, or corrupted state without doing a full re-create.`,
+Use --dry-run to check health without making any changes.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			envName := globalEnvName
@@ -35,9 +36,13 @@ stopped containers, or corrupted state without doing a full re-create.`,
 				return err
 			}
 
-			Header(fmt.Sprintf("Reconciling %s", styleDetail.Render(envName)))
+			if dryRun {
+				Header(fmt.Sprintf("Checking %s (dry run)", styleDetail.Render(envName)))
+			} else {
+				Header(fmt.Sprintf("Reconciling %s", styleDetail.Render(envName)))
+			}
 
-			report, err := mgr.Reconcile(cmd.Context(), envName)
+			report, err := mgr.Reconcile(cmd.Context(), envName, dryRun)
 			if err != nil {
 				return err
 			}
@@ -48,11 +53,15 @@ stopped containers, or corrupted state without doing a full re-create.`,
 			if report.OK > 0 {
 				DetailKeyValue("Healthy", fmt.Sprintf("%d", report.OK))
 			}
-			if report.Healed > 0 {
+			if !dryRun && report.Healed > 0 {
 				DetailKeyValue("Healed", fmt.Sprintf("%d", report.Healed))
 			}
 			if report.Failed > 0 {
-				DetailKeyValue("Failed", fmt.Sprintf("%d", report.Failed))
+				if dryRun {
+					DetailKeyValue("Broken", fmt.Sprintf("%d", report.Failed))
+				} else {
+					DetailKeyValue("Failed", fmt.Sprintf("%d", report.Failed))
+				}
 			}
 			if report.Skipped > 0 {
 				DetailKeyValue("Skipped", fmt.Sprintf("%d (hook-owned)", report.Skipped))
@@ -61,6 +70,14 @@ stopped containers, or corrupted state without doing a full re-create.`,
 				DetailKeyValue("Not run", fmt.Sprintf("%d (never completed)", report.NotRun))
 			}
 			fmt.Fprintln(os.Stderr)
+
+			if dryRun {
+				if report.Failed > 0 {
+					return fmt.Errorf("%d step(s) need healing", report.Failed)
+				}
+				Success("All steps healthy")
+				return nil
+			}
 
 			if report.Failed > 0 {
 				return fmt.Errorf("%d step(s) could not be healed", report.Failed)
@@ -73,6 +90,8 @@ stopped containers, or corrupted state without doing a full re-create.`,
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Check health without making changes")
 
 	return cmd
 }

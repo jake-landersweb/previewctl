@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -21,12 +22,17 @@ var runnerSteps = map[string]bool{
 }
 
 func newStepCmd() *cobra.Command {
+	var dryRun bool
+
 	cmd := &cobra.Command{
 		Use:   "step <step-name>",
 		Short: "Re-run a single runner-phase step in isolation",
 		Long: `Executes a single runner-phase step without running the full lifecycle.
 Useful for regenerating config files, restarting services, or re-running
 migrations without reprovisioning.
+
+Use --dry-run to preview what a step would do (shows generated config
+for generation steps, or describes the action for other steps).
 
 Available steps:
   sync_code        - Pull latest code from remote
@@ -35,8 +41,8 @@ Available steps:
   start_infra      - Restart infrastructure containers
   generate_compose - Regenerate Docker Compose file
   generate_nginx   - Regenerate nginx config
-  build_services   - Rebuild autostart services
-  start_services   - Restart autostart services
+  build_services   - Rebuild enabled services
+  start_services   - Restart enabled services
   runner_deploy    - Re-run the deploy hook
   runner_after     - Re-run the after hook (e.g., migrations)`,
 		Args: cobra.ExactArgs(1),
@@ -54,6 +60,25 @@ Available steps:
 
 			if !runnerSteps[stepName] {
 				return fmt.Errorf("unknown runner step '%s'", stepName)
+			}
+
+			if dryRun {
+				mgr, _, err := buildManager(nil)
+				if err != nil {
+					return err
+				}
+
+				Header(fmt.Sprintf("Dry run: %s on %s",
+					styleDetail.Render(stepName),
+					styleDetail.Render(envName)))
+
+				output, err := mgr.DryRunStep(cmd.Context(), envName, stepName)
+				if err != nil {
+					return err
+				}
+
+				fmt.Fprint(os.Stdout, output)
+				return nil
 			}
 
 			progress := NewCLIProgressReporter()
@@ -74,6 +99,8 @@ Available steps:
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview what the step would do without executing")
 
 	return cmd
 }

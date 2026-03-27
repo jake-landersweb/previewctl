@@ -34,7 +34,7 @@ type ReconcileReport struct {
 //   - StepCompleted: verification passed or heal succeeded
 //   - StepFailed: heal failed
 //   - StepSkipped: hook-owned or never completed
-func (m *Manager) Reconcile(ctx context.Context, envName string) (*ReconcileReport, error) {
+func (m *Manager) Reconcile(ctx context.Context, envName string, dryRun ...bool) (*ReconcileReport, error) {
 	entry, err := m.state.GetEnvironment(ctx, envName)
 	if err != nil {
 		return nil, fmt.Errorf("loading environment: %w", err)
@@ -155,7 +155,24 @@ func (m *Manager) Reconcile(ctx context.Context, envName string) (*ReconcileRepo
 			continue
 		}
 
-		// Verification failed — heal
+		// Verification failed
+		isDryRun := len(dryRun) > 0 && dryRun[0]
+		if isDryRun {
+			m.progress.OnStep(StepEvent{
+				Step:    stepName,
+				Status:  StepFailed,
+				Message: fmt.Sprintf("%s needs healing", stepName),
+			})
+			report.Results = append(report.Results, ReconcileResult{
+				Step:    stepName,
+				Action:  "broken",
+				Message: "would heal",
+			})
+			report.Failed++
+			continue
+		}
+
+		// Heal
 		m.progress.OnStep(StepEvent{
 			Step:    stepName,
 			Status:  StepStarted,
@@ -219,9 +236,12 @@ func (m *Manager) Reconcile(ctx context.Context, envName string) (*ReconcileRepo
 		report.Healed++
 	}
 
-	// Persist updated state
-	if err := m.state.SetEnvironment(ctx, envName, entry); err != nil {
-		return report, fmt.Errorf("saving reconciled state: %w", err)
+	// Persist updated state (skip on dry run)
+	isDryRun := len(dryRun) > 0 && dryRun[0]
+	if !isDryRun {
+		if err := m.state.SetEnvironment(ctx, envName, entry); err != nil {
+			return report, fmt.Errorf("saving reconciled state: %w", err)
+		}
 	}
 
 	return report, nil

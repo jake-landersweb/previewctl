@@ -444,6 +444,99 @@ func (m *Manager) RunStep(ctx context.Context, envName, stepName string) error {
 	return m.step(ctx, entry, opts)
 }
 
+// DryRunStep previews what a step would do without executing it.
+// For generation steps, returns the content that would be written.
+// For other steps, returns a description of what would happen.
+func (m *Manager) DryRunStep(ctx context.Context, envName, stepName string) (string, error) {
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return "", fmt.Errorf("loading environment: %w", err)
+	}
+	if entry == nil {
+		return "", fmt.Errorf("environment '%s' not found", envName)
+	}
+
+	ca, manifest, err := m.loadManifestFromEntry(ctx, entry)
+	if err != nil {
+		return "", err
+	}
+	_ = ca
+
+	switch stepName {
+	case "generate_env":
+		envFiles := manifest.EnvFilePaths()
+		var out strings.Builder
+		for relPath, envVars := range envFiles {
+			fmt.Fprintf(&out, "# %s\n", relPath)
+			out.Write(RenderEnvFileContent(envVars))
+			out.WriteString("\n")
+		}
+		return out.String(), nil
+
+	case "generate_compose":
+		data, err := GenerateComposeFile(m.config, manifest)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+
+	case "generate_nginx":
+		if m.config.Runner == nil || m.config.Runner.Compose == nil || !m.config.Runner.Compose.Proxy.IsEnabled() {
+			return "# nginx proxy not enabled\n", nil
+		}
+		domain := m.config.Runner.Compose.Proxy.Domain
+		data, err := GenerateNginxConfig(m.config, manifest, domain)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+
+	case "build_services":
+		services := entry.EnabledServices
+		if len(services) == 0 && m.config.Runner != nil && m.config.Runner.Compose != nil {
+			services = m.config.Runner.Compose.Autostart
+		}
+		var out strings.Builder
+		fmt.Fprintln(&out, "Would build:")
+		for _, svcName := range services {
+			svc, ok := m.config.Services[svcName]
+			if !ok || svc.Build == "" {
+				continue
+			}
+			fmt.Fprintf(&out, "  %s: %s\n", svcName, svc.Build)
+		}
+		return out.String(), nil
+
+	case "start_services":
+		services := entry.EnabledServices
+		if len(services) == 0 && m.config.Runner != nil && m.config.Runner.Compose != nil {
+			services = m.config.Runner.Compose.Autostart
+		}
+		var out strings.Builder
+		fmt.Fprintln(&out, "Would start:")
+		if m.config.Runner != nil && m.config.Runner.Compose != nil && m.config.Runner.Compose.Proxy.IsEnabled() {
+			fmt.Fprintf(&out, "  %s (proxy)\n", m.config.Runner.Compose.Proxy.ResolvedType())
+		}
+		for _, svcName := range services {
+			fmt.Fprintf(&out, "  %s\n", svcName)
+		}
+		return out.String(), nil
+
+	case "start_infra":
+		composeFile := ""
+		if manifest.Infrastructure != nil {
+			composeFile = manifest.Infrastructure.ComposeFile
+		}
+		if composeFile == "" {
+			return "No infrastructure compose file configured\n", nil
+		}
+		return fmt.Sprintf("Would run: docker compose -f %s up -d\n", composeFile), nil
+
+	default:
+		return fmt.Sprintf("Step '%s' is hook-owned — dry run not available. Would execute the step function.\n", stepName), nil
+	}
+}
+
 // SetStatus updates an environment's status.
 func (m *Manager) SetStatus(ctx context.Context, envName string, status EnvironmentStatus) error {
 	entry, err := m.state.GetEnvironment(ctx, envName)
