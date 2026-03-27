@@ -20,6 +20,9 @@ const configFileName = "previewctl.yaml"
 // globalMode holds the --mode flag value, set as a persistent flag on root.
 var globalMode string
 
+// globalEnvName holds the --env flag value, set as a persistent flag on root.
+var globalEnvName string
+
 // globalEnvFiles holds the --env-file flag value.
 var globalEnvFiles string
 
@@ -41,6 +44,7 @@ func Execute() {
 	}
 	rootCmd.Flags().BoolP("version", "v", false, "Print the current version and check for updates")
 	rootCmd.PersistentFlags().StringVarP(&globalMode, "mode", "m", "local", "Deployment mode (local, remote)")
+	rootCmd.PersistentFlags().StringVarP(&globalEnvName, "env", "e", "", "Environment name (required for remote mode, inferred from cwd for local)")
 	rootCmd.PersistentFlags().StringVar(&globalEnvFiles, "env-file", "", "Comma-separated list of env files to load (in addition to .env and .env.previewctl)")
 
 	rootCmd.AddCommand(
@@ -157,13 +161,19 @@ func loadConfigWithMode(mode string) (*domain.ProjectConfig, string, error) {
 	}
 }
 
-// resolveEnvName resolves an environment name from args or cwd.
-func resolveEnvName(args []string, statePath string) (string, error) {
-	if len(args) > 0 {
-		return args[0], nil
+// requireEnv resolves the environment name from the --env flag or cwd.
+// Remote mode: --env is always required.
+// Local mode: --env if set, otherwise inferred from cwd.
+func requireEnv(statePath string) (string, error) {
+	if globalEnvName != "" {
+		return globalEnvName, nil
 	}
 
-	// Try to resolve from cwd
+	if globalMode == "remote" {
+		return "", fmt.Errorf("--env (-e) is required for remote mode")
+	}
+
+	// Local mode: try to resolve from cwd
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("getting cwd: %w", err)

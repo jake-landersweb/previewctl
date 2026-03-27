@@ -13,7 +13,7 @@ type TemplateContext struct {
 	ServicePorts       PortMap
 	InfraPorts         PortMap
 	ProvisionerOutputs map[string]map[string]string
-	CurrentService     string // set per-service during rendering, enables {{self.port}}
+	CurrentService     string            // set per-service during rendering, enables {{self.port}}
 	EnvName            string            // environment name, enables {{env.name}}
 	Store              map[string]string // persistent key-value store, enables {{store.KEY}}
 }

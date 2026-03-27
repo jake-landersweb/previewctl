@@ -10,9 +10,9 @@ import (
 
 func newDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete [name]",
+		Use:   "delete",
 		Short: "Delete an environment",
-		Args:  cobra.MaximumNArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			progress := NewCLIProgressReporter()
 			mgr, cfg, err := buildManager(progress)
@@ -23,7 +23,7 @@ func newDeleteCmd() *cobra.Command {
 			home, _ := os.UserHomeDir()
 			statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
 
-			envName, err := resolveEnvName(args, statePath)
+			envName, err := requireEnv(statePath)
 			if err != nil {
 				return fmt.Errorf("could not determine environment: %w", err)
 			}

@@ -61,7 +61,7 @@ type RunnerConfig struct {
 // ComposeConfig defines how previewctl generates and manages Docker Compose
 // for application services in remote mode.
 type ComposeConfig struct {
-	Autostart []string     `yaml:"autostart"`      // services started on create (proxy is always implicit if enabled)
+	Autostart []string     `yaml:"autostart"`       // services started on create (proxy is always implicit if enabled)
 	Image     string       `yaml:"image"`           // base Docker image for app containers (e.g., "node:20")
 	Proxy     *ProxyConfig `yaml:"proxy,omitempty"` // reverse proxy configuration
 }
@@ -100,7 +100,7 @@ type InfrastructureConfig struct {
 // ServiceConfig defines an application service.
 type ServiceConfig struct {
 	Path      string            `yaml:"path"`
-	Port      int               `yaml:"port,omitempty"`     // fixed port — skips the port allocator when set
+	Port      int               `yaml:"port,omitempty"` // fixed port — skips the port allocator when set
 	Command   string            `yaml:"command,omitempty"`
 	DependsOn []string          `yaml:"depends_on,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`

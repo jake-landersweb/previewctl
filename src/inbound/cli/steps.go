@@ -13,12 +13,12 @@ func newStepsCmd() *cobra.Command {
 	var audit bool
 
 	cmd := &cobra.Command{
-		Use:   "steps [name]",
+		Use:   "steps",
 		Short: "Show step-by-step status and audit log for an environment",
 		Long: `Shows which provisioner and runner steps have completed, failed, or are
 pending for an environment. Use --audit to see the full chronological
 audit log of all actions taken.`,
-		Args: cobra.MaximumNArgs(1),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mgr, cfg, err := buildManager(nil)
 			if err != nil {
@@ -28,7 +28,7 @@ audit log of all actions taken.`,
 			home, _ := os.UserHomeDir()
 			statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
 
-			envName, err := resolveEnvName(args, statePath)
+			envName, err := requireEnv(statePath)
 			if err != nil {
 				return fmt.Errorf("could not determine environment: %w", err)
 			}

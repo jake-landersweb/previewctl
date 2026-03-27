@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -302,6 +303,26 @@ func SectionHeader(text string) {
 	fmt.Fprintf(os.Stderr, "  %s\n",
 		lipgloss.NewStyle().Bold(true).Foreground(colorBlue).Render(text),
 	)
+}
+
+// PrintServiceURLs prints a "Services" section with compiled URLs or localhost fallbacks.
+func PrintServiceURLs(envName string, ports domain.PortMap, proxyDomain string) {
+	SectionHeader("Services")
+	portNames := make([]string, 0, len(ports))
+	for name := range ports {
+		portNames = append(portNames, name)
+	}
+	sort.Strings(portNames)
+	for _, name := range portNames {
+		port := ports[name]
+		var url string
+		if proxyDomain != "" {
+			url = fmt.Sprintf("https://%s--%s.%s", envName, name, proxyDomain)
+		} else {
+			url = fmt.Sprintf("http://localhost:%d", port)
+		}
+		DetailKeyValue(name, url)
+	}
 }
 
 // StatusBadge returns a colored status string.

@@ -33,11 +33,14 @@ Hooks can set values using 'previewctl store set' to persist state
 
 func newStoreSetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "set <env-name> <KEY=VALUE> [KEY=VALUE...]",
+		Use:   "set <KEY=VALUE> [KEY=VALUE...]",
 		Short: "Set one or more persistent environment variables",
-		Args:  cobra.MinimumNArgs(2),
+		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName := args[0]
+			envName := globalEnvName
+			if envName == "" {
+				return fmt.Errorf("--env (-e) is required")
+			}
 
 			mgr, _, err := buildManager(nil)
 			if err != nil {
@@ -52,7 +55,7 @@ func newStoreSetCmd() *cobra.Command {
 				return fmt.Errorf("environment '%s' not found", envName)
 			}
 
-			for _, kv := range args[1:] {
+			for _, kv := range args {
 				key, value, ok := strings.Cut(kv, "=")
 				if !ok {
 					return fmt.Errorf("invalid format '%s', expected KEY=VALUE", kv)
@@ -64,7 +67,7 @@ func newStoreSetCmd() *cobra.Command {
 				return fmt.Errorf("saving environment: %w", err)
 			}
 
-			for _, kv := range args[1:] {
+			for _, kv := range args {
 				fmt.Fprintln(os.Stderr, "  "+kv)
 			}
 			return nil
@@ -74,11 +77,16 @@ func newStoreSetCmd() *cobra.Command {
 
 func newStoreGetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "get <env-name> <KEY>",
+		Use:   "get <KEY>",
 		Short: "Get a persistent environment variable",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName, key := args[0], args[1]
+			envName := globalEnvName
+			if envName == "" {
+				return fmt.Errorf("--env (-e) is required")
+			}
+
+			key := args[0]
 
 			mgr, _, err := buildManager(nil)
 			if err != nil {
@@ -106,11 +114,14 @@ func newStoreGetCmd() *cobra.Command {
 
 func newStoreListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list <env-name>",
+		Use:   "list",
 		Short: "List all persistent environment variables",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName := args[0]
+			envName := globalEnvName
+			if envName == "" {
+				return fmt.Errorf("--env (-e) is required")
+			}
 
 			mgr, _, err := buildManager(nil)
 			if err != nil {

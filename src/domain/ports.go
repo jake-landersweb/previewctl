@@ -72,5 +72,5 @@ type ProgressReporter interface {
 // NoopReporter is a ProgressReporter that discards all events.
 type NoopReporter struct{}
 
-func (NoopReporter) OnStep(StepEvent)          {}
-func (NoopReporter) StderrWriter() io.Writer   { return os.Stderr }
+func (NoopReporter) OnStep(StepEvent)        {}
+func (NoopReporter) StderrWriter() io.Writer { return os.Stderr }

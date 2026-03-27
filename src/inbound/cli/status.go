@@ -4,16 +4,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"github.com/spf13/cobra"
 )
 
 func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "status [name]",
+		Use:   "status",
 		Short: "Show detailed environment status",
-		Args:  cobra.MaximumNArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mgr, cfg, err := buildManager(nil)
 			if err != nil {
@@ -23,7 +22,7 @@ func newStatusCmd() *cobra.Command {
 			home, _ := os.UserHomeDir()
 			statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
 
-			envName, err := resolveEnvName(args, statePath)
+			envName, err := requireEnv(statePath)
 			if err != nil {
 				return fmt.Errorf("could not determine environment: %w", err)
 			}
@@ -62,16 +61,13 @@ func newStatusCmd() *cobra.Command {
 				}
 			}
 
+			var domain string
+			if cfg.Runner != nil && cfg.Runner.Compose != nil && cfg.Runner.Compose.Proxy != nil {
+				domain = cfg.Runner.Compose.Proxy.Domain
+			}
+
 			fmt.Fprintln(os.Stderr)
-			SectionHeader("Ports")
-			portNames := make([]string, 0, len(e.Ports))
-			for name := range e.Ports {
-				portNames = append(portNames, name)
-			}
-			sort.Strings(portNames)
-			for _, name := range portNames {
-				DetailKeyValue(name, fmt.Sprintf("%d", e.Ports[name]))
-			}
+			PrintServiceURLs(e.Name, e.Ports, domain)
 			fmt.Fprintln(os.Stderr)
 
 			return nil

@@ -14,14 +14,14 @@ func newAttachCmd() *cobra.Command {
 	var worktreePath string
 
 	cmd := &cobra.Command{
-		Use:   "attach [name]",
+		Use:   "attach",
 		Short: "Create a preview environment using an existing worktree",
 		Long: `Attach sets up a preview environment (ports, core services, env files,
 infrastructure) for a worktree that already exists — e.g., one created by
 Claude Code, GitHub Codex, or manually via git worktree add.
 
 The worktree itself is not managed by previewctl and will not be removed on delete.`,
-		Args: cobra.MaximumNArgs(1),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Resolve worktree path
 			if worktreePath == "" {
@@ -47,11 +47,9 @@ The worktree itself is not managed by previewctl and will not be removed on dele
 				return fmt.Errorf("%s is not a git repository", absPath)
 			}
 
-			// Resolve name
-			envName := ""
-			if len(args) > 0 {
-				envName = args[0]
-			} else {
+			// Resolve name: --env flag, or default to directory basename
+			envName := globalEnvName
+			if envName == "" {
 				envName = filepath.Base(absPath)
 			}
 

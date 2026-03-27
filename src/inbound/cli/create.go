@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/spf13/cobra"
 )
@@ -14,11 +13,14 @@ func newCreateCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "create <name>",
+		Use:   "create",
 		Short: "Create a new development environment",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName := args[0]
+			envName := globalEnvName
+			if envName == "" {
+				return fmt.Errorf("--env (-e) is required for create")
+			}
 			if branch == "" {
 				branch = envName
 			}
@@ -48,28 +50,11 @@ func newCreateCmd() *cobra.Command {
 				KeyValue("Worktree", wt)
 			}
 
-			// Show service URLs
 			var domain string
 			if cfg.Runner != nil && cfg.Runner.Compose != nil && cfg.Runner.Compose.Proxy != nil {
 				domain = cfg.Runner.Compose.Proxy.Domain
 			}
-
-			SectionHeader("Services")
-			portNames := make([]string, 0, len(entry.Ports))
-			for name := range entry.Ports {
-				portNames = append(portNames, name)
-			}
-			sort.Strings(portNames)
-			for _, name := range portNames {
-				port := entry.Ports[name]
-				var url string
-				if domain != "" {
-					url = fmt.Sprintf("https://%s--%s.%s", envName, name, domain)
-				} else {
-					url = fmt.Sprintf("http://localhost:%d", port)
-				}
-				DetailKeyValue(name, url)
-			}
+			PrintServiceURLs(envName, entry.Ports, domain)
 			fmt.Println()
 
 			return nil

@@ -22,7 +22,7 @@ var runnerSteps = map[string]bool{
 
 func newStepCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "step <env> <step-name>",
+		Use:   "step <step-name>",
 		Short: "Re-run a single runner-phase step in isolation",
 		Long: `Executes a single runner-phase step without running the full lifecycle.
 Useful for regenerating config files, restarting services, or re-running
@@ -39,12 +39,17 @@ Available steps:
   start_services   - Restart autostart services
   runner_deploy    - Re-run the deploy hook
   runner_after     - Re-run the after hook (e.g., migrations)`,
-		Args: cobra.ExactArgs(2),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName, stepName := args[0], args[1]
+			stepName := args[0]
 
 			if globalMode != "remote" {
 				return fmt.Errorf("step command is only available in remote mode (use -m remote)")
+			}
+
+			envName := globalEnvName
+			if envName == "" {
+				return fmt.Errorf("--env (-e) is required for remote mode")
 			}
 
 			if !runnerSteps[stepName] {

@@ -11,14 +11,17 @@ import (
 
 func newSSHCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "ssh <name>",
+		Use:   "ssh",
 		Short: "Open an interactive SSH session to a remote preview environment",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName := args[0]
-
 			if globalMode != "remote" {
 				return fmt.Errorf("ssh is only available in remote mode (use --mode remote or -m remote)")
+			}
+
+			envName := globalEnvName
+			if envName == "" {
+				return fmt.Errorf("--env (-e) is required for remote mode")
 			}
 
 			mgr, _, err := buildManager(nil)

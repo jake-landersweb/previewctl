@@ -16,7 +16,7 @@ func newServiceCmd() *cobra.Command {
 		Use:   "service",
 		Short: "Manage services in a remote preview environment",
 		Long: `Start, stop, restart, and inspect individual services in a remote
-preview environment. Requires --mode remote.`,
+preview environment. Requires --mode remote and --env.`,
 	}
 
 	cmd.AddCommand(
@@ -32,12 +32,12 @@ preview environment. Requires --mode remote.`,
 
 func newServiceStartCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "start <env> <service>",
+		Use:   "start <service>",
 		Short: "Build and start a service",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName, svcName := args[0], args[1]
-			ca, cfg, err := resolveRemoteEnv(cmd, envName)
+			svcName := args[0]
+			ca, cfg, err := resolveRemoteEnv(cmd)
 			if err != nil {
 				return err
 			}
@@ -70,12 +70,12 @@ func newServiceStartCmd() *cobra.Command {
 
 func newServiceStopCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "stop <env> <service>",
+		Use:   "stop <service>",
 		Short: "Stop a running service",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName, svcName := args[0], args[1]
-			ca, _, err := resolveRemoteEnv(cmd, envName)
+			svcName := args[0]
+			ca, _, err := resolveRemoteEnv(cmd)
 			if err != nil {
 				return err
 			}
@@ -94,12 +94,12 @@ func newServiceStopCmd() *cobra.Command {
 
 func newServiceRestartCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "restart <env> <service>",
+		Use:   "restart <service>",
 		Short: "Rebuild and restart a service",
-		Args:  cobra.ExactArgs(2),
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName, svcName := args[0], args[1]
-			ca, cfg, err := resolveRemoteEnv(cmd, envName)
+			svcName := args[0]
+			ca, cfg, err := resolveRemoteEnv(cmd)
 			if err != nil {
 				return err
 			}
@@ -131,23 +131,22 @@ func newServiceRestartCmd() *cobra.Command {
 
 func newServiceLogsCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "logs <env> [service]",
+		Use:   "logs [service]",
 		Short: "Stream service logs",
-		Args:  cobra.RangeArgs(1, 2),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName := args[0]
-			ca, _, err := resolveRemoteEnv(cmd, envName)
+			ca, _, err := resolveRemoteEnv(cmd)
 			if err != nil {
 				return err
 			}
 
 			svcArg := ""
-			if len(args) > 1 {
-				svcArg = args[1]
+			if len(args) > 0 {
+				svcArg = args[0]
 			}
 
 			// Use syscall.Exec to replace the process for interactive log streaming
-			entry, err := getRemoteEntry(cmd, envName)
+			entry, err := getRemoteEntry(cmd)
 			if err != nil {
 				return err
 			}
@@ -168,12 +167,12 @@ func newServiceLogsCmd() *cobra.Command {
 
 func newServiceListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list <env>",
+		Use:   "list",
 		Short: "List services and their status",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName := args[0]
-			ca, _, err := resolveRemoteEnv(cmd, envName)
+			envName := globalEnvName
+			ca, _, err := resolveRemoteEnv(cmd)
 			if err != nil {
 				return err
 			}
@@ -202,9 +201,14 @@ func newServiceListCmd() *cobra.Command {
 
 // resolveRemoteEnv validates remote mode, loads the environment and config,
 // and returns SSH compute access.
-func resolveRemoteEnv(cmd *cobra.Command, envName string) (domain.ComputeAccess, *domain.ProjectConfig, error) {
+func resolveRemoteEnv(cmd *cobra.Command) (domain.ComputeAccess, *domain.ProjectConfig, error) {
 	if globalMode != "remote" {
 		return nil, nil, fmt.Errorf("service commands are only available in remote mode (use -m remote)")
+	}
+
+	envName := globalEnvName
+	if envName == "" {
+		return nil, nil, fmt.Errorf("--env (-e) is required for remote mode")
 	}
 
 	mgr, cfg, err := buildManager(nil)
@@ -228,7 +232,12 @@ func resolveRemoteEnv(cmd *cobra.Command, envName string) (domain.ComputeAccess,
 }
 
 // getRemoteEntry loads a remote environment entry.
-func getRemoteEntry(cmd *cobra.Command, envName string) (*domain.EnvironmentEntry, error) {
+func getRemoteEntry(cmd *cobra.Command) (*domain.EnvironmentEntry, error) {
+	envName := globalEnvName
+	if envName == "" {
+		return nil, fmt.Errorf("--env (-e) is required for remote mode")
+	}
+
 	mgr, _, err := buildManager(nil)
 	if err != nil {
 		return nil, err
