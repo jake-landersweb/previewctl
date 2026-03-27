@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -196,27 +197,77 @@ func newServiceListCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			envName := globalEnvName
-			ca, _, err := resolveRemoteEnv(cmd)
+			ca, cfg, entry, err := resolveRemoteEnvWithEntry(cmd)
 			if err != nil {
 				return err
 			}
 
-			Header(fmt.Sprintf("Services in %s", styleDetail.Render(envName)))
-
-			composeCmd := "docker compose -f .previewctl.compose.yaml ps --format '{{.Name}}\t{{.State}}\t{{.Status}}'"
+			// Get running container state from docker compose
+			composeCmd := "docker compose -f .previewctl.compose.yaml ps --format '{{.Service}}\t{{.State}}\t{{.Status}}'"
 			out, err := ca.Exec(cmd.Context(), composeCmd, nil)
 			if err != nil {
 				return fmt.Errorf("listing services: %w", err)
 			}
 
-			if strings.TrimSpace(out) == "" {
-				fmt.Fprintln(os.Stderr, "  No services running")
-			} else {
-				for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-					fmt.Fprintf(os.Stderr, "  %s\n", line)
+			// Parse docker state into a map
+			running := make(map[string]string) // service name → status string
+			for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+				parts := strings.SplitN(line, "\t", 3)
+				if len(parts) >= 2 {
+					running[parts[0]] = strings.Join(parts[1:], " ")
 				}
 			}
-			fmt.Println()
+
+			// Resolve proxy domain for URLs
+			var proxyDomain string
+			if cfg.Runner != nil && cfg.Runner.Compose != nil && cfg.Runner.Compose.Proxy != nil {
+				proxyDomain = cfg.Runner.Compose.Proxy.Domain
+			}
+
+			Header(fmt.Sprintf("Services in %s", styleDetail.Render(envName)))
+
+			// Show all known services from config, sorted
+			svcNames := make([]string, 0, len(cfg.Services))
+			maxLen := 0
+			for name := range cfg.Services {
+				svcNames = append(svcNames, name)
+				if len(name) > maxLen {
+					maxLen = len(name)
+				}
+			}
+			sort.Strings(svcNames)
+			pad := fmt.Sprintf("%%-%ds", maxLen+2)
+
+			for _, name := range svcNames {
+				enabled := entry.IsServiceEnabled(name)
+				dockerStatus, isRunning := running[name]
+
+				// Status indicator
+				var status string
+				if isRunning {
+					status = styleSuccess.Render("● running")
+				} else if enabled {
+					status = styleFail.Render("● stopped") + " " + styleDim.Render("(enabled)")
+				} else {
+					status = styleDim.Render("○ disabled")
+				}
+
+				// URL
+				var url string
+				if proxyDomain != "" {
+					url = fmt.Sprintf("https://%s--%s.%s", envName, name, proxyDomain)
+				}
+
+				line := fmt.Sprintf("  %s  %s", styleMessage.Render(fmt.Sprintf(pad, name)), status)
+				if isRunning && dockerStatus != "" {
+					line += "  " + styleDim.Render(dockerStatus)
+				}
+				if url != "" && (isRunning || enabled) {
+					line += "  " + styleDetail.Render(url)
+				}
+				fmt.Fprintln(os.Stderr, line)
+			}
+			fmt.Fprintln(os.Stderr)
 
 			return nil
 		},
