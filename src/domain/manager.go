@@ -445,6 +445,46 @@ func (m *Manager) RunStep(ctx context.Context, envName, stepName string) error {
 	return m.step(ctx, entry, opts)
 }
 
+// RunSteps executes a sequence of runner steps in order, reusing a single
+// SSH connection and step registry. All steps are forced (cache bypassed).
+func (m *Manager) RunSteps(ctx context.Context, envName string, stepNames []string) error {
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return fmt.Errorf("loading environment: %w", err)
+	}
+	if entry == nil {
+		return fmt.Errorf("environment '%s' not found", envName)
+	}
+
+	ca, manifest, err := m.loadManifestFromEntry(ctx, entry)
+	if err != nil {
+		return err
+	}
+
+	if setter, ok := ca.(interface{ SetStderr(io.Writer) }); ok {
+		setter.SetStderr(m.progress.StderrWriter())
+	}
+
+	reg := newStepRegistry(m, entry, ca, manifest, envName, entry.Branch)
+
+	// Force execution by temporarily disabling cache
+	origNoCache := m.noCache
+	m.noCache = true
+	defer func() { m.noCache = origNoCache }()
+
+	for _, stepName := range stepNames {
+		opts, err := reg.get(ctx, stepName)
+		if err != nil {
+			return err
+		}
+		if err := m.step(ctx, entry, opts); err != nil {
+			return fmt.Errorf("step %s: %w", stepName, err)
+		}
+	}
+
+	return nil
+}
+
 // stepGeneratedFiles maps step names to the files they generate.
 var stepGeneratedFiles = map[string][]string{
 	"generate_compose": {".previewctl.compose.yaml"},
