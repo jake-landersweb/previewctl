@@ -100,6 +100,7 @@ type InfrastructureConfig struct {
 // ServiceConfig defines an application service.
 type ServiceConfig struct {
 	Path      string            `yaml:"path"`
+	Port      int               `yaml:"port,omitempty"`     // fixed port — skips the port allocator when set
 	Command   string            `yaml:"command,omitempty"`
 	DependsOn []string          `yaml:"depends_on,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
@@ -261,6 +262,9 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 			}
 			if overlaySvc.Path != "" {
 				baseSvc.Path = overlaySvc.Path
+			}
+			if overlaySvc.Port != 0 {
+				baseSvc.Port = overlaySvc.Port
 			}
 			if overlaySvc.Command != "" {
 				baseSvc.Command = overlaySvc.Command

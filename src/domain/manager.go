@@ -602,7 +602,16 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 		Fn: func() error {
 			var err error
 			ports, err = m.networking.AllocatePorts(envName)
-			return err
+			if err != nil {
+				return err
+			}
+			// Override with fixed ports from config
+			for name, svc := range m.config.Services {
+				if svc.Port != 0 {
+					ports[name] = svc.Port
+				}
+			}
+			return nil
 		},
 		Outputs: func() map[string]any {
 			return map[string]any{"ports": ports}
