@@ -12,6 +12,7 @@ import (
 func newCreateCmd() *cobra.Command {
 	var (
 		branch       string
+		baseBranch   string
 		noCache      bool
 		worktreePath string
 		dryRun       bool
@@ -43,7 +44,7 @@ The worktree will not be removed on delete.`,
 
 			// Dry run: show what would happen
 			if dryRun {
-				return runCreateDryRun(envName, branch)
+				return runCreateDryRun(envName, branch, baseBranch)
 			}
 
 			progress := NewCLIProgressReporter()
@@ -58,7 +59,7 @@ The worktree will not be removed on delete.`,
 			Header(fmt.Sprintf("Creating environment %s",
 				styleDetail.Render(envName)))
 
-			entry, err := mgr.Init(cmd.Context(), envName, branch)
+			entry, err := mgr.Init(cmd.Context(), envName, branch, baseBranch)
 			if err != nil {
 				return err
 			}
@@ -82,7 +83,8 @@ The worktree will not be removed on delete.`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&branch, "branch", "b", "", "Git branch name (defaults to environment name)")
+	cmd.Flags().StringVarP(&branch, "branch", "b", "", "Git branch to use/create (defaults to environment name)")
+	cmd.Flags().StringVar(&baseBranch, "base", "", "Base branch to create from (only when creating a new branch)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "Skip all step caching, re-run everything")
 	cmd.Flags().StringVarP(&worktreePath, "worktree", "w", "", "Attach to an existing worktree instead of creating one")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be created without executing")
@@ -91,7 +93,7 @@ The worktree will not be removed on delete.`,
 }
 
 // runCreateDryRun shows what create would do without executing.
-func runCreateDryRun(envName, branch string) error {
+func runCreateDryRun(envName, branch, baseBranch string) error {
 	_, cfg, err := buildManagerWithMode(nil, resolvedModeOrFlag())
 	if err != nil {
 		return err
@@ -101,6 +103,9 @@ func runCreateDryRun(envName, branch string) error {
 
 	KeyValue("Environment", envName)
 	KeyValue("Branch", branch)
+	if baseBranch != "" {
+		KeyValue("Base", baseBranch)
+	}
 	KeyValue("Mode", resolvedModeOrFlag())
 
 	// Provisioner steps

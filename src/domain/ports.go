@@ -12,7 +12,9 @@ import (
 // Sandbox: isolated VM with network policies.
 type ComputePort interface {
 	// Create sets up compute resources for an environment.
-	Create(ctx context.Context, envName string, branch string) (*ComputeResources, error)
+	// branch is the target branch to use/create.
+	// baseBranch is the branch to create from (empty = use branch as-is).
+	Create(ctx context.Context, envName string, branch string, baseBranch string) (*ComputeResources, error)
 
 	// Start starts per-environment services (infra containers, etc).
 	Start(ctx context.Context, envName string, ports PortMap) error

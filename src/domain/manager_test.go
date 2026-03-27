@@ -24,7 +24,7 @@ type mockComputePort struct {
 	baseDir string // temp dir for worktrees
 }
 
-func (m *mockComputePort) Create(_ context.Context, envName string, branch string) (*ComputeResources, error) {
+func (m *mockComputePort) Create(_ context.Context, envName string, branch string, baseBranch string) (*ComputeResources, error) {
 	m.tracker.record("compute.Create")
 	path := filepath.Join(m.baseDir, envName)
 	_ = os.MkdirAll(path, 0o755)
@@ -156,7 +156,7 @@ func TestManager_Init_CallOrder(t *testing.T) {
 	mgr, _, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	entry, err := mgr.Init(ctx, "feat-auth", "feat-auth")
+	entry, err := mgr.Init(ctx, "feat-auth", "feat-auth", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestManager_Init_WritesManifest(t *testing.T) {
 	mgr, _, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	entry, err := mgr.Init(ctx, "feat-auth", "feat-auth")
+	entry, err := mgr.Init(ctx, "feat-auth", "feat-auth", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestManager_Init_EmitsProgressEvents(t *testing.T) {
 	mgr, _, progress := newTestManager(tracker)
 	ctx := context.Background()
 
-	_, err := mgr.Init(ctx, "feat-auth", "feat-auth")
+	_, err := mgr.Init(ctx, "feat-auth", "feat-auth", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestManager_Init_WithCoreServices(t *testing.T) {
 	mgr, _, _ := newTestManagerWithCoreServices(t, tracker)
 	ctx := context.Background()
 
-	entry, err := mgr.Init(ctx, "feat-db", "feat-db")
+	entry, err := mgr.Init(ctx, "feat-db", "feat-db", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestManager_Provision_SavesProvisionedState(t *testing.T) {
 	mgr, statePort, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	entry, err := mgr.Provision(ctx, "feat-prov", "feat-prov", "")
+	entry, err := mgr.Provision(ctx, "feat-prov", "feat-prov", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -583,7 +583,7 @@ func TestManager_Provision_WritesManifest(t *testing.T) {
 	mgr, _, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	entry, err := mgr.Provision(ctx, "feat-manifest", "feat-manifest", "")
+	entry, err := mgr.Provision(ctx, "feat-manifest", "feat-manifest", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -613,7 +613,7 @@ func TestManager_Init_CallsProvisionThenRunner(t *testing.T) {
 	mgr, statePort, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	entry, err := mgr.Init(ctx, "feat-full", "feat-full")
+	entry, err := mgr.Init(ctx, "feat-full", "feat-full", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -639,7 +639,7 @@ func TestManager_Run_Stateless(t *testing.T) {
 	ctx := context.Background()
 
 	// First provision to get a manifest
-	entry, err := mgr.Provision(ctx, "feat-run", "feat-run", "")
+	entry, err := mgr.Provision(ctx, "feat-run", "feat-run", "", "")
 	if err != nil {
 		t.Fatalf("Provision error: %v", err)
 	}
@@ -725,7 +725,7 @@ func TestManager_Provision_RecordsSteps(t *testing.T) {
 	mgr, statePort, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	_, err := mgr.Provision(ctx, "feat-steps", "feat-steps", "")
+	_, err := mgr.Provision(ctx, "feat-steps", "feat-steps", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -754,7 +754,7 @@ func TestManager_Provision_IdempotentRerun(t *testing.T) {
 	ctx := context.Background()
 
 	// First provision
-	_, err := mgr.Provision(ctx, "feat-idem", "feat-idem", "")
+	_, err := mgr.Provision(ctx, "feat-idem", "feat-idem", "", "")
 	if err != nil {
 		t.Fatalf("first provision error: %v", err)
 	}
@@ -769,7 +769,7 @@ func TestManager_Provision_IdempotentRerun(t *testing.T) {
 
 	// Second provision — should skip completed steps
 	tracker.calls = nil
-	_, err = mgr.Provision(ctx, "feat-idem", "feat-idem", "")
+	_, err = mgr.Provision(ctx, "feat-idem", "feat-idem", "", "")
 	if err != nil {
 		t.Fatalf("second provision error: %v", err)
 	}
@@ -792,7 +792,7 @@ func TestManager_Provision_FromStep(t *testing.T) {
 	ctx := context.Background()
 
 	// First provision
-	_, err := mgr.Provision(ctx, "feat-from", "feat-from", "")
+	_, err := mgr.Provision(ctx, "feat-from", "feat-from", "", "")
 	if err != nil {
 		t.Fatalf("first provision error: %v", err)
 	}
@@ -804,7 +804,7 @@ func TestManager_Provision_FromStep(t *testing.T) {
 
 	// Re-provision with --from allocate_ports
 	tracker.calls = nil
-	_, err = mgr.Provision(ctx, "feat-from", "feat-from", "allocate_ports")
+	_, err = mgr.Provision(ctx, "feat-from", "feat-from", "", "allocate_ports")
 	if err != nil {
 		t.Fatalf("second provision error: %v", err)
 	}
@@ -827,7 +827,7 @@ func TestManager_Provision_NoCache(t *testing.T) {
 	ctx := context.Background()
 
 	// First provision
-	_, err := mgr.Provision(ctx, "feat-nocache", "feat-nocache", "")
+	_, err := mgr.Provision(ctx, "feat-nocache", "feat-nocache", "", "")
 	if err != nil {
 		t.Fatalf("first provision error: %v", err)
 	}
@@ -835,7 +835,7 @@ func TestManager_Provision_NoCache(t *testing.T) {
 	// Second provision with noCache
 	tracker.calls = nil
 	mgr.SetNoCache(true)
-	_, err = mgr.Provision(ctx, "feat-nocache", "feat-nocache", "")
+	_, err = mgr.Provision(ctx, "feat-nocache", "feat-nocache", "", "")
 	if err != nil {
 		t.Fatalf("second provision error: %v", err)
 	}
@@ -857,7 +857,7 @@ func TestManager_Provision_AuditLog(t *testing.T) {
 	mgr, statePort, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	_, err := mgr.Provision(ctx, "feat-audit", "feat-audit", "")
+	_, err := mgr.Provision(ctx, "feat-audit", "feat-audit", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -901,7 +901,7 @@ func TestManager_StepRecord_Outputs(t *testing.T) {
 	mgr, statePort, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	_, err := mgr.Provision(ctx, "feat-outputs", "feat-outputs", "")
+	_, err := mgr.Provision(ctx, "feat-outputs", "feat-outputs", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -957,7 +957,7 @@ func TestManager_Init_RecordsStepsAndRunning(t *testing.T) {
 	mgr, statePort, _ := newTestManager(tracker)
 	ctx := context.Background()
 
-	entry, err := mgr.Init(ctx, "feat-init-steps", "feat-init-steps")
+	entry, err := mgr.Init(ctx, "feat-init-steps", "feat-init-steps", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

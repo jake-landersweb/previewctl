@@ -329,8 +329,9 @@ func deserializeStringMap(v any) map[string]string {
 // ---------- Public lifecycle methods ----------
 
 // Init creates a new environment end-to-end: provisions then runs.
-func (m *Manager) Init(ctx context.Context, envName string, branch string) (*EnvironmentEntry, error) {
-	entry, err := m.Provision(ctx, envName, branch, "")
+// branch is the target branch. baseBranch is the branch to create from (empty = use branch as-is).
+func (m *Manager) Init(ctx context.Context, envName, branch, baseBranch string) (*EnvironmentEntry, error) {
+	entry, err := m.Provision(ctx, envName, branch, baseBranch, "")
 	if err != nil {
 		return nil, err
 	}
@@ -356,8 +357,8 @@ func (m *Manager) Attach(ctx context.Context, envName string, worktreePath strin
 
 // Provision runs the provisioner phase only. Does NOT run the runner.
 // fromStep invalidates that step and all subsequent steps, forcing re-execution.
-func (m *Manager) Provision(ctx context.Context, envName, branch, fromStep string) (*EnvironmentEntry, error) {
-	ca, manifest, entry, err := m.runProvisioner(ctx, envName, branch, "", true, fromStep)
+func (m *Manager) Provision(ctx context.Context, envName, branch, baseBranch, fromStep string) (*EnvironmentEntry, error) {
+	ca, manifest, entry, err := m.runProvisioner(ctx, envName, branch, baseBranch, "", true, fromStep)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +380,7 @@ func (m *Manager) ProvisionAttach(ctx context.Context, envName, worktreePath, fr
 		return nil, fmt.Errorf("environment '%s' is already running — use 'delete' first or choose a different name", envName)
 	}
 
-	ca, manifest, entry, err := m.runProvisioner(ctx, envName, branch, worktreePath, false, fromStep)
+	ca, manifest, entry, err := m.runProvisioner(ctx, envName, branch, "", worktreePath, false, fromStep)
 	if err != nil {
 		return nil, err
 	}
@@ -731,7 +732,7 @@ func (m *Manager) loadManifestFromEntry(ctx context.Context, entry *EnvironmentE
 }
 
 // runProvisioner executes the provisioner phase with step-level checkpointing.
-func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingWorktree string, createWorktree bool, fromStep string) (ComputeAccess, *Manifest, *EnvironmentEntry, error) {
+func (m *Manager) runProvisioner(ctx context.Context, envName, branch, baseBranch, existingWorktree string, createWorktree bool, fromStep string) (ComputeAccess, *Manifest, *EnvironmentEntry, error) {
 	// Load or create entry for checkpointing
 	entry, err := m.state.GetEnvironment(ctx, envName)
 	if err != nil {
@@ -797,6 +798,9 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 				m.progress.OnStep(StepEvent{Step: "create_compute", Status: StepStreaming, Message: "Creating remote compute..."})
 				env := m.buildHookEnv(envName, "", nil, entry.Env)
 				env = append(env, fmt.Sprintf("PREVIEWCTL_BRANCH=%s", branch))
+				if baseBranch != "" {
+					env = append(env, fmt.Sprintf("PREVIEWCTL_BASE_BRANCH=%s", baseBranch))
+				}
 				var err error
 				computeOutputs, err = ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Create,
 					m.config.Provisioner.Compute.Outputs, env, m.projectRoot, m.progress.StderrWriter())
@@ -845,7 +849,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			CompleteMsg: msg("Compute resources created"),
 			Fn: func() error {
 				var err error
-				resources, err = m.compute.Create(ctx, envName, branch)
+				resources, err = m.compute.Create(ctx, envName, branch, baseBranch)
 				return err
 			},
 			Verify: func(ctx context.Context) error {
