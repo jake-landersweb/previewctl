@@ -247,15 +247,22 @@ func (r *stepRegistry) buildServices(ctx context.Context) StepOpts {
 			r.m.progress.OnStep(StepEvent{Step: "build_services", Status: StepStreaming})
 			services := r.enabledServices()
 			var cmds []string
+			var names []string
 			for _, svcName := range services {
 				svc, ok := cfg.Services[svcName]
 				if !ok || svc.Build == "" {
 					continue
 				}
 				cmds = append(cmds, svc.Build)
+				names = append(names, svcName)
 			}
 			if len(cmds) == 0 {
 				return nil
+			}
+			stderr := r.m.progress.StderrWriter()
+			fmt.Fprintf(stderr, "    Services: %s\n", strings.Join(names, ", "))
+			for i, cmd := range cmds {
+				fmt.Fprintf(stderr, "    [%d/%d] %s\n", i+1, len(cmds), cmd)
 			}
 			_, err := r.ca.Exec(ctx, strings.Join(cmds, " && "), nil)
 			return err
