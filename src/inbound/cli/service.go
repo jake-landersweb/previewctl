@@ -37,7 +37,7 @@ func newServiceStartCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			svcName := args[0]
-			ca, cfg, err := resolveRemoteEnv(cmd)
+			ca, cfg, entry, err := resolveRemoteEnvWithEntry(cmd)
 			if err != nil {
 				return err
 			}
@@ -45,6 +45,13 @@ func newServiceStartCmd() *cobra.Command {
 			svc, ok := cfg.Services[svcName]
 			if !ok {
 				return fmt.Errorf("unknown service '%s'", svcName)
+			}
+
+			if entry.IsServiceEnabled(svcName) {
+				fmt.Fprintf(os.Stderr, "  %s Service %s is already running\n",
+					styleDim.Render("·"),
+					styleDetail.Render(svcName))
+				return nil
 			}
 
 			// Build if configured
@@ -80,9 +87,16 @@ func newServiceStopCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			svcName := args[0]
-			ca, _, err := resolveRemoteEnv(cmd)
+			ca, _, entry, err := resolveRemoteEnvWithEntry(cmd)
 			if err != nil {
 				return err
+			}
+
+			if !entry.IsServiceEnabled(svcName) {
+				fmt.Fprintf(os.Stderr, "  %s Service %s is not running\n",
+					styleDim.Render("·"),
+					styleDetail.Render(svcName))
+				return nil
 			}
 
 			Header(fmt.Sprintf("Stopping %s", styleDetail.Render(svcName)))
@@ -212,33 +226,39 @@ func newServiceListCmd() *cobra.Command {
 // resolveRemoteEnv validates remote mode, loads the environment and config,
 // and returns SSH compute access.
 func resolveRemoteEnv(cmd *cobra.Command) (domain.ComputeAccess, *domain.ProjectConfig, error) {
+	ca, cfg, _, err := resolveRemoteEnvWithEntry(cmd)
+	return ca, cfg, err
+}
+
+// resolveRemoteEnvWithEntry is like resolveRemoteEnv but also returns the entry.
+func resolveRemoteEnvWithEntry(cmd *cobra.Command) (domain.ComputeAccess, *domain.ProjectConfig, *domain.EnvironmentEntry, error) {
 	envName := globalEnvName
 	if envName == "" {
-		return nil, nil, fmt.Errorf("--env (-e) is required for service commands")
+		return nil, nil, nil, fmt.Errorf("--env (-e) is required for service commands")
 	}
 
 	if resolvedMode() != "remote" {
-		return nil, nil, fmt.Errorf("service commands are only available for remote environments")
+		return nil, nil, nil, fmt.Errorf("service commands are only available for remote environments")
 	}
 
 	mgr, cfg, err := buildManager(nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	entry, err := mgr.GetEnvironment(cmd.Context(), envName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading environment: %w", err)
+		return nil, nil, nil, fmt.Errorf("loading environment: %w", err)
 	}
 	if entry == nil {
-		return nil, nil, fmt.Errorf("environment '%s' not found", envName)
+		return nil, nil, nil, fmt.Errorf("environment '%s' not found", envName)
 	}
 	if entry.Compute == nil || entry.Compute.Type != "ssh" {
-		return nil, nil, fmt.Errorf("environment '%s' is not a remote environment", envName)
+		return nil, nil, nil, fmt.Errorf("environment '%s' is not a remote environment", envName)
 	}
 
 	ca := mgr.BuildSSHComputeAccess(entry)
-	return ca, cfg, nil
+	return ca, cfg, entry, nil
 }
 
 // trackServiceEnabled adds a service to the environment's enabled set and persists.
