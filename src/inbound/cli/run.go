@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newRunCmd() *cobra.Command {
+func newRunnerCmd() *cobra.Command {
 	var (
 		manifestPath string
 		fromStep     string
@@ -16,7 +16,7 @@ func newRunCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "run",
+		Use:   "runner",
 		Short: "Run the runner phase from an existing manifest",
 		Long: `Run executes the runner phase (install deps, generate env files, start
 infrastructure, deploy) using a .previewctl.json manifest. This is typically

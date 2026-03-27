@@ -43,29 +43,17 @@ func Execute() {
 			_ = cmd.Help()
 		},
 	}
+	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.Flags().BoolP("version", "v", false, "Print the current version and check for updates")
 	rootCmd.PersistentFlags().StringVarP(&globalMode, "mode", "m", "", "Deployment mode (local, remote). Inferred from environment state when omitted.")
 	rootCmd.PersistentFlags().StringVarP(&globalEnvName, "env", "e", "", "Environment name (required for remote mode, inferred from cwd for local)")
 	rootCmd.PersistentFlags().StringVar(&globalEnvFiles, "env-file", "", "Comma-separated list of env files to load (in addition to .env and .env.previewctl)")
 
 	rootCmd.AddCommand(
-		newCreateCmd(),
-		newAttachCmd(),
-		newDeleteCmd(),
-		newListCmd(),
-		newStatusCmd(),
-		newProvisionCmd(),
-		newRunCmd(),
-		newStepsCmd(),
-		newProvisionerCmd(),
-		newVetCmd(),
-		newSSHCmd(),
-		newServiceCmd(),
-		newStepCmd(),
-		newStoreCmd(),
-		newCleanCmd(),
-		newReconcileCmd(),
+		newEnvCmd(),
 		newMigrateCmd(),
+		newVetCmd(),
+		newCleanCmd(),
 		newVersionCmd(),
 	)
 
