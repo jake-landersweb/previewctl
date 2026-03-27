@@ -18,6 +18,7 @@ import (
 const configFileName = "previewctl.yaml"
 
 // globalMode holds the --mode flag value, set as a persistent flag on root.
+// Empty string means "infer from environment state".
 var globalMode string
 
 // globalEnvName holds the --env flag value, set as a persistent flag on root.
@@ -43,7 +44,7 @@ func Execute() {
 		},
 	}
 	rootCmd.Flags().BoolP("version", "v", false, "Print the current version and check for updates")
-	rootCmd.PersistentFlags().StringVarP(&globalMode, "mode", "m", "local", "Deployment mode (local, remote)")
+	rootCmd.PersistentFlags().StringVarP(&globalMode, "mode", "m", "", "Deployment mode (local, remote). Inferred from environment state when omitted.")
 	rootCmd.PersistentFlags().StringVarP(&globalEnvName, "env", "e", "", "Environment name (required for remote mode, inferred from cwd for local)")
 	rootCmd.PersistentFlags().StringVar(&globalEnvFiles, "env-file", "", "Comma-separated list of env files to load (in addition to .env and .env.previewctl)")
 
@@ -63,6 +64,7 @@ func Execute() {
 		newStepCmd(),
 		newStoreCmd(),
 		newCleanCmd(),
+		newReconcileCmd(),
 		newMigrateCmd(),
 		newVersionCmd(),
 	)
@@ -73,9 +75,66 @@ func Execute() {
 	}
 }
 
-// buildManager loads config using the global --mode flag, wires adapters, and creates a Manager.
+// resolveMode determines the deployment mode. Priority:
+//  1. Explicit --mode flag (non-empty)
+//  2. Inferred from stored environment state (when --env is set)
+//  3. Default to "local"
+func resolveMode() (string, error) {
+	if globalMode != "" {
+		return globalMode, nil
+	}
+
+	// Try to infer from stored environment
+	if globalEnvName != "" {
+		if mode, err := inferModeFromState(globalEnvName); err == nil && mode != "" {
+			return mode, nil
+		}
+	}
+
+	return "local", nil
+}
+
+// inferModeFromState looks up an environment in available state sources
+// and returns its stored mode. Checks Postgres first (if DSN available),
+// then falls back to file state.
+func inferModeFromState(envName string) (string, error) {
+	// Load base config (no overlay) to get the project name
+	baseCfg, _, err := loadConfigWithMode("local")
+	if err != nil {
+		return "", err
+	}
+
+	// Try Postgres state if DSN is available
+	dsn := os.Getenv("PREVIEWCTL_STATE_DSN")
+	if dsn != "" {
+		pgAdapter, err := filestate.NewPostgresStateAdapter(dsn, baseCfg.Name)
+		if err == nil {
+			entry, err := pgAdapter.GetEnvironment(context.Background(), envName)
+			if err == nil && entry != nil {
+				return string(entry.Mode), nil
+			}
+		}
+	}
+
+	// Try file state
+	home, _ := os.UserHomeDir()
+	statePath := filepath.Join(home, ".cache", "previewctl", baseCfg.Name, "state.json")
+	fileAdapter := filestate.NewFileStateAdapter(statePath)
+	entry, err := fileAdapter.GetEnvironment(context.Background(), envName)
+	if err == nil && entry != nil {
+		return string(entry.Mode), nil
+	}
+
+	return "", nil
+}
+
+// buildManager loads config, resolves mode, wires adapters, and creates a Manager.
 func buildManager(progress domain.ProgressReporter) (*domain.Manager, *domain.ProjectConfig, error) {
-	return buildManagerWithMode(progress, globalMode)
+	mode, err := resolveMode()
+	if err != nil {
+		return nil, nil, err
+	}
+	return buildManagerWithMode(progress, mode)
 }
 
 // buildManagerWithMode loads config with the specified mode overlay, wires adapters, and creates a Manager.
@@ -121,6 +180,16 @@ func buildManagerWithMode(progress domain.ProgressReporter, mode string) (*domai
 	return mgr, cfg, nil
 }
 
+// resolvedMode returns the mode that buildManager would use.
+// Convenience for CLI commands that need to check the mode.
+func resolvedMode() string {
+	mode, err := resolveMode()
+	if err != nil {
+		return "local"
+	}
+	return mode
+}
+
 // loadConfig searches for previewctl.yaml with "local" mode overlay.
 func loadConfig() (*domain.ProjectConfig, string, error) {
 	return loadConfigWithMode("local")
@@ -162,18 +231,12 @@ func loadConfigWithMode(mode string) (*domain.ProjectConfig, string, error) {
 }
 
 // requireEnv resolves the environment name from the --env flag or cwd.
-// Remote mode: --env is always required.
-// Local mode: --env if set, otherwise inferred from cwd.
 func requireEnv(statePath string) (string, error) {
 	if globalEnvName != "" {
 		return globalEnvName, nil
 	}
 
-	if globalMode == "remote" {
-		return "", fmt.Errorf("--env (-e) is required for remote mode")
-	}
-
-	// Local mode: try to resolve from cwd
+	// Try to resolve from cwd (local mode)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("getting cwd: %w", err)
@@ -185,7 +248,11 @@ func requireEnv(statePath string) (string, error) {
 		return "", fmt.Errorf("loading state: %w", err)
 	}
 
-	return domain.ResolveEnvironmentFromCwd(cwd, fullState.Environments)
+	envName, err := domain.ResolveEnvironmentFromCwd(cwd, fullState.Environments)
+	if err != nil {
+		return "", fmt.Errorf("--env (-e) is required (could not infer from cwd: %w)", err)
+	}
+	return envName, nil
 }
 
 // loadEnvFiles loads environment variables from default files (.env, .env.previewctl)

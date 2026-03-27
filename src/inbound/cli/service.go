@@ -145,10 +145,9 @@ func newServiceLogsCmd() *cobra.Command {
 				svcArg = args[0]
 			}
 
-			// Use syscall.Exec to replace the process for interactive log streaming
-			entry, err := getRemoteEntry(cmd)
-			if err != nil {
-				return err
+			sshCA, ok := ca.(*domain.DomainSSHComputeAccess)
+			if !ok {
+				return fmt.Errorf("environment does not support SSH")
 			}
 
 			composeCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml logs -f %s", svcArg)
@@ -159,8 +158,9 @@ func newServiceLogsCmd() *cobra.Command {
 				return fmt.Errorf("ssh not found: %w", err)
 			}
 
-			target := fmt.Sprintf("%s@%s", entry.Compute.User, entry.Compute.Host)
-			return syscall.Exec(sshBin, []string{"ssh", "-t", target, remoteCmd}, os.Environ())
+			sshArgs := append([]string{"ssh", "-t"}, sshCA.SSHArgs()...)
+			sshArgs = append(sshArgs, remoteCmd)
+			return syscall.Exec(sshBin, sshArgs, os.Environ())
 		},
 	}
 }
@@ -202,13 +202,13 @@ func newServiceListCmd() *cobra.Command {
 // resolveRemoteEnv validates remote mode, loads the environment and config,
 // and returns SSH compute access.
 func resolveRemoteEnv(cmd *cobra.Command) (domain.ComputeAccess, *domain.ProjectConfig, error) {
-	if globalMode != "remote" {
-		return nil, nil, fmt.Errorf("service commands are only available in remote mode (use -m remote)")
-	}
-
 	envName := globalEnvName
 	if envName == "" {
-		return nil, nil, fmt.Errorf("--env (-e) is required for remote mode")
+		return nil, nil, fmt.Errorf("--env (-e) is required for service commands")
+	}
+
+	if resolvedMode() != "remote" {
+		return nil, nil, fmt.Errorf("service commands are only available for remote environments")
 	}
 
 	mgr, cfg, err := buildManager(nil)
@@ -227,27 +227,7 @@ func resolveRemoteEnv(cmd *cobra.Command) (domain.ComputeAccess, *domain.Project
 		return nil, nil, fmt.Errorf("environment '%s' is not a remote environment", envName)
 	}
 
-	ca := domain.NewDomainSSHComputeAccess(entry.Compute.Host, entry.Compute.User, entry.Compute.Path)
+	ca := mgr.BuildSSHComputeAccess(entry)
 	return ca, cfg, nil
 }
 
-// getRemoteEntry loads a remote environment entry.
-func getRemoteEntry(cmd *cobra.Command) (*domain.EnvironmentEntry, error) {
-	envName := globalEnvName
-	if envName == "" {
-		return nil, fmt.Errorf("--env (-e) is required for remote mode")
-	}
-
-	mgr, _, err := buildManager(nil)
-	if err != nil {
-		return nil, err
-	}
-	entry, err := mgr.GetEnvironment(cmd.Context(), envName)
-	if err != nil {
-		return nil, err
-	}
-	if entry == nil {
-		return nil, fmt.Errorf("environment '%s' not found", envName)
-	}
-	return entry, nil
-}

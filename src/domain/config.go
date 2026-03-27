@@ -44,9 +44,22 @@ type ProvisionerServiceConfig struct {
 
 // ComputeHooks defines lifecycle hooks for compute resources.
 type ComputeHooks struct {
-	Create  string   `yaml:"create"`
-	Destroy string   `yaml:"destroy"`
-	Outputs []string `yaml:"outputs,omitempty"`
+	Create  string     `yaml:"create"`
+	Destroy string     `yaml:"destroy"`
+	Outputs []string   `yaml:"outputs,omitempty"`
+	SSH     *SSHConfig `yaml:"ssh,omitempty"`
+}
+
+// SSHConfig defines how previewctl connects to remote compute via SSH.
+// All fields support {{store.KEY}} template resolution.
+type SSHConfig struct {
+	// ProxyCommand is the SSH ProxyCommand used to tunnel into the VM.
+	// Example: "gcloud compute start-iap-tunnel {{store.VM_NAME}} %p --listen-on-stdin --zone={{store.GCP_ZONE}} --project={{store.GCP_PROJECT}}"
+	ProxyCommand string `yaml:"proxy_command"`
+	// User is the SSH username. Example: "{{store.SSH_USER}}"
+	User string `yaml:"user"`
+	// Root is the remote working directory. Defaults to "/app".
+	Root string `yaml:"root,omitempty"`
 }
 
 // RunnerConfig holds runner lifecycle hooks.
@@ -212,7 +225,22 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 		base.Provisioner.After = overlay.Provisioner.After
 	}
 	if overlay.Provisioner.Compute != nil {
-		base.Provisioner.Compute = overlay.Provisioner.Compute
+		if base.Provisioner.Compute == nil {
+			base.Provisioner.Compute = overlay.Provisioner.Compute
+		} else {
+			if overlay.Provisioner.Compute.Create != "" {
+				base.Provisioner.Compute.Create = overlay.Provisioner.Compute.Create
+			}
+			if overlay.Provisioner.Compute.Destroy != "" {
+				base.Provisioner.Compute.Destroy = overlay.Provisioner.Compute.Destroy
+			}
+			if len(overlay.Provisioner.Compute.Outputs) > 0 {
+				base.Provisioner.Compute.Outputs = overlay.Provisioner.Compute.Outputs
+			}
+			if overlay.Provisioner.Compute.SSH != nil {
+				base.Provisioner.Compute.SSH = overlay.Provisioner.Compute.SSH
+			}
+		}
 	}
 	if overlay.Provisioner.Services != nil {
 		if base.Provisioner.Services == nil {

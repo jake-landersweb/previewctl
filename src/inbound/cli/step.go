@@ -43,13 +43,13 @@ Available steps:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			stepName := args[0]
 
-			if globalMode != "remote" {
-				return fmt.Errorf("step command is only available in remote mode (use -m remote)")
-			}
-
 			envName := globalEnvName
 			if envName == "" {
-				return fmt.Errorf("--env (-e) is required for remote mode")
+				return fmt.Errorf("--env (-e) is required for step")
+			}
+
+			if resolvedMode() != "remote" {
+				return fmt.Errorf("step command is only available for remote environments")
 			}
 
 			if !runnerSteps[stepName] {

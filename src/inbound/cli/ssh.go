@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"syscall"
 
+	"github.com/jake-landersweb/previewctl/src/domain"
 	"github.com/spf13/cobra"
 )
 
@@ -15,13 +16,13 @@ func newSSHCmd() *cobra.Command {
 		Short: "Open an interactive SSH session to a remote preview environment",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if globalMode != "remote" {
-				return fmt.Errorf("ssh is only available in remote mode (use --mode remote or -m remote)")
-			}
-
 			envName := globalEnvName
 			if envName == "" {
-				return fmt.Errorf("--env (-e) is required for remote mode")
+				return fmt.Errorf("--env (-e) is required for ssh")
+			}
+
+			if resolvedMode() != "remote" {
+				return fmt.Errorf("ssh is only available for remote environments (use -m remote for create, or the environment must be remote)")
 			}
 
 			mgr, _, err := buildManager(nil)
@@ -40,11 +41,16 @@ func newSSHCmd() *cobra.Command {
 				return fmt.Errorf("environment '%s' is not a remote environment", envName)
 			}
 
-			target := fmt.Sprintf("%s@%s", entry.Compute.User, entry.Compute.Host)
+			ca := mgr.BuildSSHComputeAccess(entry)
+			sshCA, ok := ca.(*domain.DomainSSHComputeAccess)
+			if !ok {
+				return fmt.Errorf("environment '%s' does not support SSH", envName)
+			}
+
 			Header(fmt.Sprintf("Connecting to %s", styleDetail.Render(envName)))
 			KeyValue("Host", entry.Compute.Host)
-			KeyValue("User", entry.Compute.User)
-			KeyValue("Root", entry.Compute.Path)
+			KeyValue("User", sshCA.User())
+			KeyValue("Root", sshCA.Root())
 			fmt.Println()
 
 			// Replace the current process with ssh (interactive)
@@ -53,7 +59,8 @@ func newSSHCmd() *cobra.Command {
 				return fmt.Errorf("ssh not found: %w", err)
 			}
 
-			sshArgs := []string{"ssh", "-t", target, fmt.Sprintf("cd %s && exec $SHELL -l", entry.Compute.Path)}
+			sshArgs := append([]string{"ssh", "-t"}, sshCA.SSHArgs()...)
+			sshArgs = append(sshArgs, fmt.Sprintf("cd %s && exec $SHELL -l", sshCA.Root()))
 			return syscall.Exec(sshBin, sshArgs, os.Environ())
 		},
 	}

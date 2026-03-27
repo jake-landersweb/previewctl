@@ -200,19 +200,74 @@ func (m *Manager) stepSimple(_ context.Context, name string, startMsg string, co
 // computeAccessInfo builds ComputeAccessInfo from a ComputeAccess.
 func computeAccessInfo(ca ComputeAccess, managed bool) *ComputeAccessInfo {
 	if ssh, ok := ca.(*DomainSSHComputeAccess); ok {
-		return &ComputeAccessInfo{
+		info := &ComputeAccessInfo{
 			Type:            "ssh",
 			Host:            ssh.Host(),
 			User:            ssh.User(),
 			Path:            ssh.Root(),
 			ManagedWorktree: managed,
 		}
+		if ssh.ProxyCommand() != "" {
+			info.Metadata = map[string]string{
+				"proxy_command": ssh.ProxyCommand(),
+			}
+		}
+		return info
 	}
 	return &ComputeAccessInfo{
 		Type:            "local",
 		Path:            ca.Root(),
 		ManagedWorktree: managed,
 	}
+}
+
+// buildSSHComputeAccess constructs SSH compute access from an environment entry.
+// It resolves the SSH config template from the project config using store values,
+// or falls back to stored proxy_command in metadata, or direct host connection.
+func (m *Manager) BuildSSHComputeAccess(entry *EnvironmentEntry) ComputeAccess {
+	// Try to resolve proxy_command from config template + store
+	if m.config.Provisioner.Compute != nil && m.config.Provisioner.Compute.SSH != nil {
+		sshCfg := m.config.Provisioner.Compute.SSH
+		tmplCtx := &TemplateContext{Store: entry.Env}
+
+		proxyCmd, err := RenderTemplate(sshCfg.ProxyCommand, tmplCtx)
+		if err == nil && proxyCmd != "" {
+			user := entry.Compute.User
+			if sshCfg.User != "" {
+				if resolved, err := RenderTemplate(sshCfg.User, tmplCtx); err == nil {
+					user = resolved
+				}
+			}
+			root := entry.Compute.Path
+			if sshCfg.Root != "" {
+				if resolved, err := RenderTemplate(sshCfg.Root, tmplCtx); err == nil {
+					root = resolved
+				}
+			}
+			host := entry.Compute.Host
+			return NewDomainSSHComputeAccessWithOpts(SSHComputeAccessOpts{
+				Host:         host,
+				User:         user,
+				Root:         root,
+				ProxyCommand: proxyCmd,
+			})
+		}
+	}
+
+	// Fall back to stored proxy_command in metadata
+	if entry.Compute.Metadata != nil {
+		if proxyCmd, ok := entry.Compute.Metadata["proxy_command"]; ok && proxyCmd != "" {
+			return NewDomainSSHComputeAccessWithOpts(SSHComputeAccessOpts{
+				Host:         entry.Compute.Host,
+				User:         entry.Compute.User,
+				Root:         entry.Compute.Path,
+				ProxyCommand: proxyCmd,
+			})
+		}
+	}
+
+	// Direct mode
+	return NewDomainSSHComputeAccess(entry.Compute.Host, entry.Compute.User, entry.Compute.Path)
 }
 
 // ---------- Step ordering ----------
@@ -355,7 +410,7 @@ func (m *Manager) Run(ctx context.Context, manifestPath, fromStep string) error 
 
 // RunStep executes a single runner-phase step in isolation.
 // Loads the environment from state, reconstructs compute access, reads the manifest,
-// and runs the specified step without checkpointing (always executes).
+// and runs only the specified step (always executes, ignoring cache).
 func (m *Manager) RunStep(ctx context.Context, envName, stepName string) error {
 	entry, err := m.state.GetEnvironment(ctx, envName)
 	if err != nil {
@@ -370,19 +425,23 @@ func (m *Manager) RunStep(ctx context.Context, envName, stepName string) error {
 		return err
 	}
 
-	// Temporarily enable noCache so the step always runs
+	// Wire stderr through the progress reporter
+	if setter, ok := ca.(interface{ SetStderr(io.Writer) }); ok {
+		setter.SetStderr(m.progress.StderrWriter())
+	}
+
+	reg := newStepRegistry(m, entry, ca, manifest, envName, entry.Branch)
+	opts, err := reg.get(ctx, stepName)
+	if err != nil {
+		return err
+	}
+
+	// Force execution by temporarily disabling cache
 	origNoCache := m.noCache
 	m.noCache = true
 	defer func() { m.noCache = origNoCache }()
 
-	// Run the single step through the runner, which will skip all other cached steps
-	// and only execute the target step (since noCache is true, it runs everything,
-	// but we want just one step). Instead, call runRunner and let it execute —
-	// the noCache flag means nothing is skipped.
-	// TODO: For true single-step execution, we'd need to extract each step into
-	// a callable function. For now, run the full runner with noCache.
-	_, err = m.runRunner(ctx, envName, entry.Branch, ca, manifest, false, true, entry)
-	return err
+	return m.step(ctx, entry, opts)
 }
 
 // SetStatus updates an environment's status.
@@ -425,7 +484,7 @@ func (m *Manager) loadManifestFromEntry(ctx context.Context, entry *EnvironmentE
 
 	var ca ComputeAccess
 	if entry.Compute.Type == "ssh" {
-		ca = NewDomainSSHComputeAccess(entry.Compute.Host, entry.Compute.User, entry.Compute.Path)
+		ca = m.BuildSSHComputeAccess(entry)
 	} else {
 		ca = NewDomainLocalComputeAccess(entry.Compute.Path)
 	}
@@ -497,7 +556,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 		var computeOutputs map[string]string
 		// Try to load cached compute info
 		if entry.Compute != nil && entry.Compute.Type == "ssh" && entry.StepCompleted("create_compute") {
-			ca = NewDomainSSHComputeAccess(entry.Compute.Host, entry.Compute.User, entry.Compute.Path)
+			ca = m.BuildSSHComputeAccess(entry)
 		}
 		createMsg := "Compute created via hook"
 		if err := m.step(ctx, entry, StepOpts{
@@ -730,225 +789,57 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 		setter.SetStderr(m.progress.StderrWriter())
 	}
 
+	// Use the step registry for all runner steps
+	reg := newStepRegistry(m, entry, ca, manifest, envName, branch)
+
 	// 0. Sync code on re-runs (pull latest from remote)
-	// Only runs when the runner has already completed before (re-run, not first create).
-	// Runs directly (not via step()) so it always executes — the point is to pull fresh code.
 	if entry != nil && entry.StepCompleted("runner_before") {
-		m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepStarted, Message: fmt.Sprintf("Syncing code to origin/%s...", branch)})
-		syncCmd := fmt.Sprintf("git fetch --depth 1 origin %s && git reset --hard origin/%s", branch, branch)
-		if _, err := ca.Exec(ctx, syncCmd, nil); err != nil {
-			m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepFailed, Message: err.Error()})
+		syncOpts := reg.syncCode(ctx)
+		m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepStarted, Message: syncOpts.StartMsg})
+		if err := syncOpts.Fn(); err != nil {
+			m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepFailed, Error: err})
 			return nil, fmt.Errorf("syncing code: %w", err)
 		}
-		m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepCompleted, Message: "Code synced to latest"})
+		m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepCompleted, Message: *syncOpts.CompleteMsg})
 	}
 
-	// 1. runner.before hook
-	if m.config.Runner != nil && m.config.Runner.Before != "" {
-		beforeMsg := fmt.Sprintf("Ran runner.before (%s)", m.config.Runner.Before)
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "runner_before",
-			StartMsg:    fmt.Sprintf("Running runner.before → %s", m.config.Runner.Before),
-			CompleteMsg: &beforeMsg,
-			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_before", Status: StepStreaming, Message: fmt.Sprintf("Running runner.before → %s", m.config.Runner.Before)})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports, entry.Env)
-				_, err := ca.Exec(ctx, m.config.Runner.Before, env)
-				return err
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("runner before hook: %w", err)
-		}
+	// 1-2. runner.before + generate_env
+	if err := m.step(ctx, entry, reg.runnerBefore(ctx)); err != nil {
+		return nil, fmt.Errorf("runner before hook: %w", err)
 	}
-
-	// 2. Generate .env files from manifest (batched into a single SSH call)
-	envFiles := manifest.EnvFilePaths()
-	if len(envFiles) > 0 {
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "generate_env",
-			StartMsg:    "Generating .env files...",
-			CompleteMsg: msg(".env files generated"),
-			Fn: func() error {
-				// Build a single script that writes all env files at once
-				var script strings.Builder
-				script.WriteString("set -e\n")
-				for relPath, envVars := range envFiles {
-					content := RenderEnvFileContent(envVars)
-					dir := filepath.Dir(relPath)
-					if dir != "." {
-						fmt.Fprintf(&script, "mkdir -p %q\n", dir)
-					}
-					fmt.Fprintf(&script, "cat > %q <<'ENVEOF'\n%sENVEOF\n", relPath, string(content))
-				}
-				_, err := ca.Exec(ctx, script.String(), nil)
-				return err
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("generating env files: %w", err)
-		}
+	if err := m.step(ctx, entry, reg.generateEnv(ctx)); err != nil {
+		return nil, fmt.Errorf("generating env files: %w", err)
 	}
 
 	// 3. Start per-env infrastructure
-	if err := m.step(ctx, entry, StepOpts{
-		Name:        "start_infra",
-		StartMsg:    "Starting infrastructure containers...",
-		CompleteMsg: msg("Infrastructure containers started"),
-		Fn: func() error {
-			composeFile := ""
-			if manifest.Infrastructure != nil {
-				composeFile = manifest.Infrastructure.ComposeFile
-			}
-			if composeFile == "" {
-				return nil
-			}
-			env := BuildComposeEnv(m.config.Name, envName, manifest.Ports)
-			cmd := fmt.Sprintf("docker compose -f %s up -d", composeFile)
-			_, err := ca.Exec(ctx, cmd, env)
-			return err
-		},
-		Verify: func(ctx context.Context) error {
-			composeFile := ""
-			if manifest.Infrastructure != nil {
-				composeFile = manifest.Infrastructure.ComposeFile
-			}
-			if composeFile == "" {
-				return nil
-			}
-			projectName := ComposeProjectName(m.config.Name, envName)
-			cmd := fmt.Sprintf("docker compose -f %s -p %s ps --format json", composeFile, projectName)
-			out, err := ca.Exec(ctx, cmd, nil)
-			if err != nil {
-				return err
-			}
-			if len(strings.TrimSpace(out)) == 0 {
-				return fmt.Errorf("infrastructure not running")
-			}
-			return nil
-		},
-	}); err != nil {
+	if err := m.step(ctx, entry, reg.startInfra(ctx)); err != nil {
 		return nil, fmt.Errorf("starting infrastructure: %w", err)
 	}
 
-	// 4-7. Compose-managed services (only when runner.compose is configured)
+	// 4-7. Compose-managed services
 	if m.config.Runner != nil && m.config.Runner.Compose != nil {
-		// 4. Generate Docker Compose file
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "generate_compose",
-			StartMsg:    "Generating Docker Compose file...",
-			CompleteMsg: msg("Docker Compose file generated"),
-			Fn: func() error {
-				data, err := GenerateComposeFile(m.config, manifest)
-				if err != nil {
-					return fmt.Errorf("generating compose file: %w", err)
-				}
-				return ca.WriteFile(ctx, ".previewctl.compose.yaml", data, 0o644)
-			},
-		}); err != nil {
+		if err := m.step(ctx, entry, reg.generateCompose(ctx)); err != nil {
 			return nil, fmt.Errorf("generating compose file: %w", err)
 		}
-
-		// 5. Generate proxy config (nginx, etc.) if enabled
 		if m.config.Runner.Compose.Proxy.IsEnabled() {
-			if err := m.step(ctx, entry, StepOpts{
-				Name:        "generate_nginx",
-				StartMsg:    "Generating nginx config...",
-				CompleteMsg: msg("nginx config generated"),
-				Fn: func() error {
-					domain := m.config.Runner.Compose.Proxy.Domain
-					if domain == "" {
-						return fmt.Errorf("runner.compose.proxy.domain is required")
-					}
-					data, err := GenerateNginxConfig(m.config, manifest, domain)
-					if err != nil {
-						return fmt.Errorf("generating nginx config: %w", err)
-					}
-					return ca.WriteFile(ctx, "preview/nginx.conf", data, 0o644)
-				},
-			}); err != nil {
+			if err := m.step(ctx, entry, reg.generateNginx(ctx)); err != nil {
 				return nil, fmt.Errorf("generating nginx config: %w", err)
 			}
 		}
-
-		// 6. Build autostart services (batched into single SSH call)
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "build_services",
-			StartMsg:    "Building services...",
-			CompleteMsg: msg("Services built"),
-			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "build_services", Status: StepStreaming})
-				var cmds []string
-				for _, svcName := range m.config.Runner.Compose.Autostart {
-					svc, ok := m.config.Services[svcName]
-					if !ok || svc.Build == "" {
-						continue
-					}
-					cmds = append(cmds, svc.Build)
-				}
-				if len(cmds) == 0 {
-					return nil
-				}
-				_, err := ca.Exec(ctx, strings.Join(cmds, " && "), nil)
-				return err
-			},
-		}); err != nil {
+		if err := m.step(ctx, entry, reg.buildServices(ctx)); err != nil {
 			return nil, fmt.Errorf("building services: %w", err)
 		}
-
-		// 7. Start autostart services (+ proxy if enabled)
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "start_services",
-			StartMsg:    "Starting services...",
-			CompleteMsg: msg("Services started"),
-			Fn: func() error {
-				var services []string
-				if m.config.Runner.Compose.Proxy.IsEnabled() {
-					proxyType := m.config.Runner.Compose.Proxy.ResolvedType()
-					services = append(services, proxyType) // e.g., "nginx"
-				}
-				services = append(services, m.config.Runner.Compose.Autostart...)
-				cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml up -d %s", strings.Join(services, " "))
-				_, err := ca.Exec(ctx, cmd, nil)
-				return err
-			},
-		}); err != nil {
+		if err := m.step(ctx, entry, reg.startServices(ctx)); err != nil {
 			return nil, fmt.Errorf("starting services: %w", err)
 		}
 	}
 
-	// 8. runner.deploy hook
-	if m.config.Runner != nil && m.config.Runner.Deploy != "" {
-		deployMsg := fmt.Sprintf("Ran runner.deploy (%s)", m.config.Runner.Deploy)
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "runner_deploy",
-			StartMsg:    fmt.Sprintf("Running runner.deploy → %s", m.config.Runner.Deploy),
-			CompleteMsg: &deployMsg,
-			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_deploy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.deploy → %s", m.config.Runner.Deploy)})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports, entry.Env)
-				_, err := ca.Exec(ctx, m.config.Runner.Deploy, env)
-				return err
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("runner deploy hook: %w", err)
-		}
+	// 8-9. Deploy and after hooks
+	if err := m.step(ctx, entry, reg.runnerDeploy(ctx)); err != nil {
+		return nil, fmt.Errorf("runner deploy hook: %w", err)
 	}
-
-	// 5. runner.after hook
-	if m.config.Runner != nil && m.config.Runner.After != "" {
-		afterMsg := fmt.Sprintf("Ran runner.after (%s)", m.config.Runner.After)
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "runner_after",
-			StartMsg:    fmt.Sprintf("Running runner.after → %s", m.config.Runner.After),
-			CompleteMsg: &afterMsg,
-			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_after", Status: StepStreaming, Message: fmt.Sprintf("Running runner.after → %s", m.config.Runner.After)})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports, entry.Env)
-				_, err := ca.Exec(ctx, m.config.Runner.After, env)
-				return err
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("runner after hook: %w", err)
-		}
+	if err := m.step(ctx, entry, reg.runnerAfter(ctx)); err != nil {
+		return nil, fmt.Errorf("runner after hook: %w", err)
 	}
 
 	// 6. Save state
@@ -1002,7 +893,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 	if entry.Compute != nil {
 		switch entry.Compute.Type {
 		case "ssh":
-			ca = NewDomainSSHComputeAccess(entry.Compute.Host, entry.Compute.User, entry.Compute.Path)
+			ca = m.BuildSSHComputeAccess(entry)
 		case "local":
 			if entry.Compute.Path != "" {
 				ca = NewDomainLocalComputeAccess(entry.Compute.Path)
