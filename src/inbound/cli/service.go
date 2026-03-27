@@ -155,7 +155,16 @@ func newServiceRestartCmd() *cobra.Command {
 }
 
 func newServiceLogsCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		follow     bool
+		tail       string
+		since      string
+		until      string
+		timestamps bool
+		noColor    bool
+	)
+
+	cmd := &cobra.Command{
 		Use:   "logs [service]",
 		Short: "Stream service logs",
 		Args:  cobra.MaximumNArgs(1),
@@ -175,8 +184,31 @@ func newServiceLogsCmd() *cobra.Command {
 				return fmt.Errorf("environment does not support SSH")
 			}
 
-			composeCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml logs -f %s", svcArg)
-			remoteCmd := fmt.Sprintf("cd %q && %s", ca.Root(), composeCmd)
+			// Build docker compose logs command with flags
+			composeArgs := "docker compose -f .previewctl.compose.yaml logs"
+			if follow {
+				composeArgs += " -f"
+			}
+			if tail != "" {
+				composeArgs += fmt.Sprintf(" --tail %s", tail)
+			}
+			if since != "" {
+				composeArgs += fmt.Sprintf(" --since %s", since)
+			}
+			if until != "" {
+				composeArgs += fmt.Sprintf(" --until %s", until)
+			}
+			if timestamps {
+				composeArgs += " -t"
+			}
+			if noColor {
+				composeArgs += " --no-color"
+			}
+			if svcArg != "" {
+				composeArgs += " " + svcArg
+			}
+
+			remoteCmd := fmt.Sprintf("cd %q && %s", ca.Root(), composeArgs)
 
 			sshBin, err := exec.LookPath("ssh")
 			if err != nil {
@@ -188,6 +220,15 @@ func newServiceLogsCmd() *cobra.Command {
 			return syscall.Exec(sshBin, sshArgs, os.Environ())
 		},
 	}
+
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Follow log output")
+	cmd.Flags().StringVar(&tail, "tail", "", "Number of lines to show from the end (e.g., 100, all)")
+	cmd.Flags().StringVar(&since, "since", "", "Show logs since timestamp (e.g., 2024-01-01T00:00:00, 30m, 1h)")
+	cmd.Flags().StringVar(&until, "until", "", "Show logs until timestamp")
+	cmd.Flags().BoolVarP(&timestamps, "timestamps", "t", false, "Show timestamps")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
+
+	return cmd
 }
 
 func newServiceListCmd() *cobra.Command {
