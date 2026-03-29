@@ -40,11 +40,12 @@ type ComputeResources struct {
 // ComputeAccessInfo stores how to reach the compute location so environments
 // can be reconnected across CLI invocations.
 type ComputeAccessInfo struct {
-	Type            string `json:"type"`                      // "local" or "ssh"
-	Path            string `json:"path,omitempty"`            // local worktree path
-	Host            string `json:"host,omitempty"`            // VM IP (ssh)
-	User            string `json:"user,omitempty"`            // SSH user
-	ManagedWorktree bool   `json:"managedWorktree,omitempty"` // true = created by previewctl
+	Type            string            `json:"type"`                      // "local" or "ssh"
+	Path            string            `json:"path,omitempty"`            // local worktree path or remote root
+	Host            string            `json:"host,omitempty"`            // VM hostname (ssh)
+	User            string            `json:"user,omitempty"`            // SSH user
+	ManagedWorktree bool              `json:"managedWorktree,omitempty"` // true = created by previewctl
+	Metadata        map[string]string `json:"metadata,omitempty"`        // hook-provided metadata (e.g., "vm_zone", "gcp_project")
 }
 
 // SanitizeName replaces characters not safe for use in database names, file paths,
@@ -127,8 +128,59 @@ type EnvironmentEntry struct {
 	Ports              PortMap                      `json:"ports"`
 	ProvisionerOutputs map[string]map[string]string `json:"provisionerOutputs"`
 	Compute            *ComputeAccessInfo           `json:"compute,omitempty"`
+	Env                map[string]string            `json:"env,omitempty"`             // persistent key-value store for hooks
+	EnabledServices    []string                     `json:"enabledServices,omitempty"` // services currently enabled (seeded from autostart, updated by service start/stop)
 	Steps              map[string]*StepRecord       `json:"steps,omitempty"`
 	AuditLog           []AuditEntry                 `json:"auditLog,omitempty"`
+}
+
+// SetEnv sets a key-value pair in the environment's persistent store.
+func (e *EnvironmentEntry) SetEnv(key, value string) {
+	if e.Env == nil {
+		e.Env = make(map[string]string)
+	}
+	e.Env[key] = value
+}
+
+// GetEnv reads a value from the environment's persistent store.
+func (e *EnvironmentEntry) GetEnv(key string) (string, bool) {
+	if e.Env == nil {
+		return "", false
+	}
+	v, ok := e.Env[key]
+	return v, ok
+}
+
+// EnableService adds a service to the enabled set (idempotent).
+func (e *EnvironmentEntry) EnableService(name string) {
+	for _, s := range e.EnabledServices {
+		if s == name {
+			return
+		}
+	}
+	e.EnabledServices = append(e.EnabledServices, name)
+	e.UpdatedAt = time.Now()
+}
+
+// DisableService removes a service from the enabled set.
+func (e *EnvironmentEntry) DisableService(name string) {
+	for i, s := range e.EnabledServices {
+		if s == name {
+			e.EnabledServices = append(e.EnabledServices[:i], e.EnabledServices[i+1:]...)
+			e.UpdatedAt = time.Now()
+			return
+		}
+	}
+}
+
+// IsServiceEnabled returns true if the service is in the enabled set.
+func (e *EnvironmentEntry) IsServiceEnabled(name string) bool {
+	for _, s := range e.EnabledServices {
+		if s == name {
+			return true
+		}
+	}
+	return false
 }
 
 // WorktreePath returns the worktree path from ComputeAccessInfo, or empty string.

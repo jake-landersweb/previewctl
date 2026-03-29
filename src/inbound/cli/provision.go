@@ -9,13 +9,14 @@ import (
 
 func newProvisionCmd() *cobra.Command {
 	var (
-		branch   string
-		fromStep string
-		noCache  bool
+		branch     string
+		baseBranch string
+		fromStep   string
+		noCache    bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "provision <name>",
+		Use:   "provision",
 		Short: "Run the provisioner phase only (create compute, seed services, write manifest)",
 		Long: `Provision sets up compute resources and external services for an environment
 without running the runner phase. This is used in CI/remote workflows where
@@ -23,9 +24,12 @@ provisioning happens on the orchestrator and running happens on the VM.
 
 After provisioning, the environment is in "provisioned" state. Use 'previewctl run'
 on the target compute to execute the runner phase.`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envName := args[0]
+			envName := globalEnvName
+			if envName == "" {
+				return fmt.Errorf("--env (-e) is required for provision")
+			}
 			if branch == "" {
 				branch = envName
 			}
@@ -42,7 +46,7 @@ on the target compute to execute the runner phase.`,
 			Header(fmt.Sprintf("Provisioning environment %s",
 				styleDetail.Render(envName)))
 
-			entry, err := mgr.Provision(cmd.Context(), envName, branch, fromStep)
+			entry, err := mgr.Provision(cmd.Context(), envName, branch, baseBranch, fromStep)
 			if err != nil {
 				return err
 			}
@@ -74,7 +78,8 @@ on the target compute to execute the runner phase.`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&branch, "branch", "b", "", "Git branch name (defaults to environment name)")
+	cmd.Flags().StringVarP(&branch, "branch", "b", "", "Git branch to use/create (defaults to environment name)")
+	cmd.Flags().StringVar(&baseBranch, "base", "", "Base branch to create from (only when creating a new branch)")
 	cmd.Flags().StringVar(&fromStep, "from", "", "Force re-run from this step (invalidates subsequent steps)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "Skip all step caching, re-run everything")
 

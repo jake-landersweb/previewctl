@@ -20,6 +20,7 @@ type Manifest struct {
 	ProvisionerOutputs map[string]map[string]string `json:"provisioner_outputs,omitempty"`
 	Services           map[string]ManifestService   `json:"services,omitempty"`
 	Infrastructure     *ManifestInfrastructure      `json:"infrastructure,omitempty"`
+	EnabledServices    []string                     `json:"enabled_services,omitempty"`
 }
 
 // ManifestService describes a service with fully resolved env vars.
@@ -40,6 +41,7 @@ func BuildManifest(
 	envName, branch, mode string,
 	ports PortMap,
 	provisionerOutputs map[string]map[string]string,
+	store map[string]string,
 ) (*Manifest, error) {
 	// Split ports into service and infrastructure
 	servicePorts := make(PortMap)
@@ -52,11 +54,19 @@ func BuildManifest(
 		}
 	}
 
+	// Resolve proxy domain for {{proxy.*}} templates
+	var proxyDomain string
+	if cfg.Runner != nil && cfg.Runner.Compose != nil && cfg.Runner.Compose.Proxy != nil {
+		proxyDomain = cfg.Runner.Compose.Proxy.Domain
+	}
+
 	tmplCtx := &TemplateContext{
 		ServicePorts:       servicePorts,
 		InfraPorts:         infraPorts,
 		ProvisionerOutputs: provisionerOutputs,
 		EnvName:            envName,
+		Store:              store,
+		ProxyDomain:        proxyDomain,
 	}
 
 	// Resolve env vars for each service

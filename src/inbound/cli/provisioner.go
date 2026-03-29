@@ -77,9 +77,9 @@ func newProvisionerInitCmd(svcName string) *cobra.Command {
 
 func newProvisionerSeedCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "seed [env]",
+		Use:   "seed",
 		Short: "Run the seed hook for a specific environment",
-		Args:  cobra.MaximumNArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			progress := NewCLIProgressReporter()
 			mgr, cfg, err := buildManager(progress)
@@ -90,7 +90,7 @@ func newProvisionerSeedCmd(svcName string) *cobra.Command {
 			home, _ := os.UserHomeDir()
 			statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
 
-			envName, err := resolveEnvName(args, statePath)
+			envName, err := requireEnv(statePath)
 			if err != nil {
 				return fmt.Errorf("could not determine environment: %w", err)
 			}
@@ -116,9 +116,9 @@ func newProvisionerSeedCmd(svcName string) *cobra.Command {
 
 func newProvisionerResetCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "reset [env]",
+		Use:   "reset",
 		Short: "Reset this service for a specific environment",
-		Args:  cobra.MaximumNArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			progress := NewCLIProgressReporter()
 			mgr, cfg, err := buildManager(progress)
@@ -129,7 +129,7 @@ func newProvisionerResetCmd(svcName string) *cobra.Command {
 			home, _ := os.UserHomeDir()
 			statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
 
-			envName, err := resolveEnvName(args, statePath)
+			envName, err := requireEnv(statePath)
 			if err != nil {
 				return fmt.Errorf("could not determine environment: %w", err)
 			}
@@ -150,9 +150,9 @@ func newProvisionerResetCmd(svcName string) *cobra.Command {
 
 func newProvisionerDestroyCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "destroy [env]",
+		Use:   "destroy",
 		Short: "Destroy this service for a specific environment",
-		Args:  cobra.MaximumNArgs(1),
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			progress := NewCLIProgressReporter()
 			mgr, cfg, err := buildManager(progress)
@@ -163,7 +163,7 @@ func newProvisionerDestroyCmd(svcName string) *cobra.Command {
 			home, _ := os.UserHomeDir()
 			statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
 
-			envName, err := resolveEnvName(args, statePath)
+			envName, err := requireEnv(statePath)
 			if err != nil {
 				return fmt.Errorf("could not determine environment: %w", err)
 			}

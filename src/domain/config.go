@@ -44,17 +44,65 @@ type ProvisionerServiceConfig struct {
 
 // ComputeHooks defines lifecycle hooks for compute resources.
 type ComputeHooks struct {
-	Create  string   `yaml:"create"`
-	Destroy string   `yaml:"destroy"`
-	Outputs []string `yaml:"outputs,omitempty"`
+	Create  string     `yaml:"create"`
+	Destroy string     `yaml:"destroy"`
+	Outputs []string   `yaml:"outputs,omitempty"`
+	SSH     *SSHConfig `yaml:"ssh,omitempty"`
+}
+
+// SSHConfig defines how previewctl connects to remote compute via SSH.
+// All fields support {{store.KEY}} template resolution.
+type SSHConfig struct {
+	// ProxyCommand is the SSH ProxyCommand used to tunnel into the VM.
+	// Example: "gcloud compute start-iap-tunnel {{store.VM_NAME}} %p --listen-on-stdin --zone={{store.GCP_ZONE}} --project={{store.GCP_PROJECT}}"
+	ProxyCommand string `yaml:"proxy_command"`
+	// User is the SSH username. Example: "{{store.SSH_USER}}"
+	User string `yaml:"user"`
+	// Root is the remote working directory. Defaults to "/app".
+	Root string `yaml:"root,omitempty"`
 }
 
 // RunnerConfig holds runner lifecycle hooks.
 type RunnerConfig struct {
-	Before  string `yaml:"before,omitempty"`
-	Deploy  string `yaml:"deploy,omitempty"`
-	Destroy string `yaml:"destroy,omitempty"`
-	After   string `yaml:"after,omitempty"`
+	Before  string         `yaml:"before,omitempty"`
+	Deploy  string         `yaml:"deploy,omitempty"`
+	Destroy string         `yaml:"destroy,omitempty"`
+	After   string         `yaml:"after,omitempty"`
+	Compose *ComposeConfig `yaml:"compose,omitempty"`
+}
+
+// ComposeConfig defines how previewctl generates and manages Docker Compose
+// for application services in remote mode.
+type ComposeConfig struct {
+	Autostart []string     `yaml:"autostart"`       // services started on create (proxy is always implicit if enabled)
+	Image     string       `yaml:"image"`           // base Docker image for app containers (e.g., "node:20")
+	Proxy     *ProxyConfig `yaml:"proxy,omitempty"` // reverse proxy configuration
+}
+
+// ProxyConfig defines the reverse proxy that sits in front of preview services.
+type ProxyConfig struct {
+	Enabled *bool  `yaml:"enabled,omitempty"` // defaults to true if omitted
+	Domain  string `yaml:"domain"`            // e.g., "preview.airgoods.com"
+	Type    string `yaml:"type,omitempty"`    // "nginx" (default). Future: "traefik", "caddy"
+}
+
+// IsEnabled returns whether the proxy is enabled (defaults to true).
+func (p *ProxyConfig) IsEnabled() bool {
+	if p == nil {
+		return false
+	}
+	if p.Enabled == nil {
+		return true
+	}
+	return *p.Enabled
+}
+
+// ResolvedType returns the proxy type, defaulting to "nginx".
+func (p *ProxyConfig) ResolvedType() string {
+	if p == nil || p.Type == "" {
+		return "nginx"
+	}
+	return p.Type
 }
 
 // InfrastructureConfig holds infrastructure configuration.
@@ -65,10 +113,36 @@ type InfrastructureConfig struct {
 // ServiceConfig defines an application service.
 type ServiceConfig struct {
 	Path      string            `yaml:"path"`
+	Port      int               `yaml:"port,omitempty"` // fixed port — skips the port allocator when set
 	Command   string            `yaml:"command,omitempty"`
 	DependsOn []string          `yaml:"depends_on,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
 	EnvFile   string            `yaml:"env_file,omitempty"` // relative to path, defaults to ".env.local"
+	Build     string            `yaml:"build,omitempty"`    // build command (run on host before container starts)
+	Start     string            `yaml:"start,omitempty"`    // start command (run inside container). Required for compose generation.
+	Proxy     []ServiceProxy    `yaml:"proxy,omitempty"`    // optional reverse proxy rules for nginx
+}
+
+// ServiceProxy defines a reverse proxy rule on a service's subdomain.
+// When configured, nginx generates a location block that proxies the given
+// path to the target service's port (same-origin for IAP cookie compatibility).
+type ServiceProxy struct {
+	Path       string             `yaml:"path"`                  // source path the browser sends, e.g., "/api" or "/iapi"
+	TargetPath string             `yaml:"target_path,omitempty"` // path rewritten to on the target service. Defaults to Path if omitted.
+	To         ServiceProxyTarget `yaml:"to"`
+}
+
+// ResolvedTargetPath returns the target path, defaulting to Path if not set.
+func (p *ServiceProxy) ResolvedTargetPath() string {
+	if p.TargetPath != "" {
+		return p.TargetPath
+	}
+	return p.Path
+}
+
+// ServiceProxyTarget identifies the target service for a proxy rule.
+type ServiceProxyTarget struct {
+	Service string `yaml:"service"` // target service name, resolved to its port at generation time
 }
 
 // ResolvedEnvFile returns the env file path relative to the service path.
@@ -151,7 +225,22 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 		base.Provisioner.After = overlay.Provisioner.After
 	}
 	if overlay.Provisioner.Compute != nil {
-		base.Provisioner.Compute = overlay.Provisioner.Compute
+		if base.Provisioner.Compute == nil {
+			base.Provisioner.Compute = overlay.Provisioner.Compute
+		} else {
+			if overlay.Provisioner.Compute.Create != "" {
+				base.Provisioner.Compute.Create = overlay.Provisioner.Compute.Create
+			}
+			if overlay.Provisioner.Compute.Destroy != "" {
+				base.Provisioner.Compute.Destroy = overlay.Provisioner.Compute.Destroy
+			}
+			if len(overlay.Provisioner.Compute.Outputs) > 0 {
+				base.Provisioner.Compute.Outputs = overlay.Provisioner.Compute.Outputs
+			}
+			if overlay.Provisioner.Compute.SSH != nil {
+				base.Provisioner.Compute.SSH = overlay.Provisioner.Compute.SSH
+			}
+		}
 	}
 	if overlay.Provisioner.Services != nil {
 		if base.Provisioner.Services == nil {
@@ -202,6 +291,9 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 			if overlaySvc.Path != "" {
 				baseSvc.Path = overlaySvc.Path
 			}
+			if overlaySvc.Port != 0 {
+				baseSvc.Port = overlaySvc.Port
+			}
 			if overlaySvc.Command != "" {
 				baseSvc.Command = overlaySvc.Command
 			}
@@ -210,6 +302,15 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 			}
 			if overlaySvc.EnvFile != "" {
 				baseSvc.EnvFile = overlaySvc.EnvFile
+			}
+			if overlaySvc.Build != "" {
+				baseSvc.Build = overlaySvc.Build
+			}
+			if overlaySvc.Start != "" {
+				baseSvc.Start = overlaySvc.Start
+			}
+			if len(overlaySvc.Proxy) > 0 {
+				baseSvc.Proxy = overlaySvc.Proxy
 			}
 			if overlaySvc.Env != nil {
 				if baseSvc.Env == nil {
@@ -239,6 +340,9 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 			}
 			if overlay.Runner.Destroy != "" {
 				base.Runner.Destroy = overlay.Runner.Destroy
+			}
+			if overlay.Runner.Compose != nil {
+				base.Runner.Compose = overlay.Runner.Compose
 			}
 		}
 	}

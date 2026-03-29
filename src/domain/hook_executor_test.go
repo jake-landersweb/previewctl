@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"os"
 	"testing"
 )
 
@@ -64,6 +65,7 @@ func TestExecuteCoreHook_CapturesOutput(t *testing.T) {
 		[]string{"DB_HOST", "DB_PORT"},
 		nil,
 		t.TempDir(),
+		os.Stderr,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -83,6 +85,7 @@ func TestExecuteCoreHook_MissingOutputError(t *testing.T) {
 		[]string{"DB_HOST", "DB_PORT", "CONNECTION_STRING"},
 		nil,
 		t.TempDir(),
+		os.Stderr,
 	)
 	if err == nil {
 		t.Fatal("expected error for missing outputs")
@@ -99,6 +102,7 @@ func TestExecuteCoreHook_NoOutputsRequired(t *testing.T) {
 		nil,
 		nil,
 		t.TempDir(),
+		os.Stderr,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -116,6 +120,7 @@ func TestExecuteCoreHook_ScriptFailure(t *testing.T) {
 		nil,
 		nil,
 		t.TempDir(),
+		os.Stderr,
 	)
 	if err == nil {
 		t.Fatal("expected error for failed script")
@@ -129,6 +134,7 @@ func TestExecuteCoreHook_EnvVarsPassedThrough(t *testing.T) {
 		[]string{"RESULT"},
 		[]string{"MY_VAR=hello_world"},
 		t.TempDir(),
+		os.Stderr,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

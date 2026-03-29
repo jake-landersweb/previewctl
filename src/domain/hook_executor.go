@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"os/exec"
 	"strings"
 )
@@ -13,7 +13,7 @@ import (
 // stderr streams to the terminal in real-time for visibility.
 // stdout is captured and parsed for KEY=VALUE pairs.
 // Returns the captured outputs, validated against declaredOutputs.
-func ExecuteCoreHook(ctx context.Context, hookScript string, declaredOutputs []string, env []string, workdir string) (map[string]string, error) {
+func ExecuteCoreHook(ctx context.Context, hookScript string, declaredOutputs []string, env []string, workdir string, stderr io.Writer) (map[string]string, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-c", hookScript)
 	cmd.Dir = workdir
 	cmd.Env = env
@@ -21,9 +21,9 @@ func ExecuteCoreHook(ctx context.Context, hookScript string, declaredOutputs []s
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 
-	// Stream stderr in real-time for visibility.
+	// Stream stderr through the provided writer for visibility.
 	// Caller should emit StepStreaming to stop the spinner before this runs.
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = stderr
 
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("hook failed: %w", err)

@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,23 +44,50 @@ var (
 type CLIProgressReporter struct {
 	stepStart time.Time
 	spinner   *liveSpinner
+	streaming bool          // true after StepStreaming received
+	stderr    *indentWriter // indents hook output
 }
 
 // NewCLIProgressReporter creates a new CLI progress reporter.
 func NewCLIProgressReporter() *CLIProgressReporter {
-	return &CLIProgressReporter{}
+	return &CLIProgressReporter{
+		stderr: newIndentWriter(os.Stderr, "    "),
+	}
+}
+
+// StderrWriter returns a writer that indents hook output for display below the step indicator.
+func (r *CLIProgressReporter) StderrWriter() io.Writer {
+	return r.stderr
 }
 
 func (r *CLIProgressReporter) OnStep(event domain.StepEvent) {
 	switch event.Status {
 	case domain.StepStarted:
 		r.stepStart = time.Now()
+		r.streaming = false
 		// Stop any previous spinner
 		if r.spinner != nil {
 			r.spinner.Stop()
 		}
 		r.spinner = newLiveSpinner(event.Message)
 		r.spinner.Start()
+
+	case domain.StepStreaming:
+		// Transition from animated spinner to static indicator
+		if r.spinner != nil {
+			r.spinner.Stop()
+			r.spinner = nil
+		}
+		r.streaming = true
+		// Print static indicator line for the step
+		msg := event.Message
+		if msg == "" {
+			msg = event.Step
+		}
+		fmt.Fprintf(os.Stderr, "\r  %s %s\n",
+			styleDim.Render("→"),
+			styleMessage.Render(msg),
+		)
 
 	case domain.StepCompleted:
 		if r.spinner != nil {
@@ -69,21 +99,40 @@ func (r *CLIProgressReporter) OnStep(event domain.StepEvent) {
 		if msg == "" {
 			msg = "Done"
 		}
-		fmt.Fprintf(os.Stderr, "\r  %s %s %s\n",
-			styleSuccess.Render("✓"),
-			styleMessage.Render(msg),
-			styleDuration.Render(formatDuration(elapsed)),
-		)
+		if r.streaming {
+			// Output was printed below the static indicator — print completion as new line
+			fmt.Fprintf(os.Stderr, "  %s %s %s\n",
+				styleSuccess.Render("✓"),
+				styleMessage.Render(msg),
+				styleDuration.Render(formatDuration(elapsed)),
+			)
+		} else {
+			// Pure compute step — overwrite the spinner line in place
+			fmt.Fprintf(os.Stderr, "\r  %s %s %s\n",
+				styleSuccess.Render("✓"),
+				styleMessage.Render(msg),
+				styleDuration.Render(formatDuration(elapsed)),
+			)
+		}
+		r.streaming = false
 
 	case domain.StepFailed:
 		if r.spinner != nil {
 			r.spinner.Stop()
 			r.spinner = nil
 		}
-		fmt.Fprintf(os.Stderr, "\r  %s %s\n",
-			styleFail.Render("✗"),
-			styleFail.Render(fmt.Sprintf("Failed: %v", event.Error)),
-		)
+		if r.streaming {
+			fmt.Fprintf(os.Stderr, "  %s %s\n",
+				styleFail.Render("✗"),
+				styleFail.Render(fmt.Sprintf("Failed: %v", event.Error)),
+			)
+		} else {
+			fmt.Fprintf(os.Stderr, "\r  %s %s\n",
+				styleFail.Render("✗"),
+				styleFail.Render(fmt.Sprintf("Failed: %v", event.Error)),
+			)
+		}
+		r.streaming = false
 
 	case domain.StepSkipped:
 		if r.spinner != nil {
@@ -94,14 +143,6 @@ func (r *CLIProgressReporter) OnStep(event domain.StepEvent) {
 			styleSkipped.Render("−"),
 			styleDim.Render(event.Message),
 		)
-
-	case domain.StepStreaming:
-		// Stop spinner so hook output can stream cleanly
-		if r.spinner != nil {
-			r.spinner.Stop()
-			r.spinner = nil
-		}
-		fmt.Fprintf(os.Stderr, "\r\033[K")
 	}
 }
 
@@ -111,6 +152,50 @@ func formatDuration(d time.Duration) string {
 	}
 	return fmt.Sprintf("(%.1fs)", d.Seconds())
 }
+
+// ---------- indentWriter ----------
+
+// indentWriter wraps an io.Writer and prefixes each line with an indent string.
+type indentWriter struct {
+	w      io.Writer
+	indent string
+	atBOL  bool // true when at beginning of line
+	mu     sync.Mutex
+}
+
+func newIndentWriter(w io.Writer, indent string) *indentWriter {
+	return &indentWriter{w: w, indent: indent, atBOL: true}
+}
+
+func (iw *indentWriter) Write(p []byte) (n int, err error) {
+	iw.mu.Lock()
+	defer iw.mu.Unlock()
+
+	written := 0
+	for len(p) > 0 {
+		if iw.atBOL {
+			if _, err := iw.w.Write([]byte(iw.indent)); err != nil {
+				return written, err
+			}
+			iw.atBOL = false
+		}
+		idx := bytes.IndexByte(p, '\n')
+		if idx < 0 {
+			n, err := iw.w.Write(p)
+			return written + n, err
+		}
+		n, err := iw.w.Write(p[:idx+1])
+		written += n
+		if err != nil {
+			return written, err
+		}
+		p = p[idx+1:]
+		iw.atBOL = true
+	}
+	return written, nil
+}
+
+// ---------- liveSpinner ----------
 
 // liveSpinner animates a spinner on the current line until stopped.
 type liveSpinner struct {
@@ -218,6 +303,26 @@ func SectionHeader(text string) {
 	fmt.Fprintf(os.Stderr, "  %s\n",
 		lipgloss.NewStyle().Bold(true).Foreground(colorBlue).Render(text),
 	)
+}
+
+// PrintServiceURLs prints a "Services" section with compiled URLs or localhost fallbacks.
+func PrintServiceURLs(envName string, ports domain.PortMap, proxyDomain string) {
+	SectionHeader("Services")
+	portNames := make([]string, 0, len(ports))
+	for name := range ports {
+		portNames = append(portNames, name)
+	}
+	sort.Strings(portNames)
+	for _, name := range portNames {
+		port := ports[name]
+		var url string
+		if proxyDomain != "" {
+			url = fmt.Sprintf("https://%s--%s.%s", envName, name, proxyDomain)
+		} else {
+			url = fmt.Sprintf("http://localhost:%d", port)
+		}
+		DetailKeyValue(name, url)
+	}
 }
 
 // StatusBadge returns a colored status string.

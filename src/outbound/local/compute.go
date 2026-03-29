@@ -29,18 +29,27 @@ func NewComputeAdapter(config *domain.ProjectConfig, composeFile string) *Comput
 	}
 }
 
-func (a *ComputeAdapter) Create(ctx context.Context, envName string, branch string) (*domain.ComputeResources, error) {
+func (a *ComputeAdapter) Create(ctx context.Context, envName string, branch string, baseBranch string) (*domain.ComputeResources, error) {
 	worktreePath := filepath.Join(a.worktreeBase, a.config.Name, envName)
 
 	// Create worktree
-	cmd := exec.CommandContext(ctx, "git", "worktree", "add", worktreePath, "-b", branch)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// Try without -b if branch already exists
-		cmd = exec.CommandContext(ctx, "git", "worktree", "add", worktreePath, branch)
-		if out2, err2 := cmd.CombinedOutput(); err2 != nil {
-			return nil, fmt.Errorf("creating worktree: %s\n%s", string(out), string(out2))
+	var cmd *exec.Cmd
+	if baseBranch != "" {
+		// Create a new branch from base: git worktree add <path> -b <branch> <base>
+		cmd = exec.CommandContext(ctx, "git", "worktree", "add", worktreePath, "-b", branch, baseBranch)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("creating branch '%s' from '%s': %s", branch, baseBranch, string(out))
 		}
-		_ = out
+	} else {
+		// Try creating a new branch, fall back to existing branch
+		cmd = exec.CommandContext(ctx, "git", "worktree", "add", worktreePath, "-b", branch)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			cmd = exec.CommandContext(ctx, "git", "worktree", "add", worktreePath, branch)
+			if out2, err2 := cmd.CombinedOutput(); err2 != nil {
+				return nil, fmt.Errorf("creating worktree: %s\n%s", string(out), string(out2))
+			}
+			_ = out
+		}
 	}
 
 	// Update submodules if they exist

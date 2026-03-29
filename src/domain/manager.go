@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -173,6 +174,10 @@ func (m *Manager) step(ctx context.Context, entry *EnvironmentEntry, opts StepOp
 			Machine:    rec.Machine,
 			DurationMs: rec.DurationMs,
 		})
+		// Reload store values from state in case a hook subprocess wrote to them
+		if latest, err := m.state.GetEnvironment(ctx, entry.Name); err == nil && latest != nil && latest.Env != nil {
+			entry.Env = latest.Env
+		}
 		if err := m.state.SetEnvironment(ctx, entry.Name, entry); err != nil {
 			return fmt.Errorf("persisting step checkpoint: %w", err)
 		}
@@ -195,19 +200,74 @@ func (m *Manager) stepSimple(_ context.Context, name string, startMsg string, co
 // computeAccessInfo builds ComputeAccessInfo from a ComputeAccess.
 func computeAccessInfo(ca ComputeAccess, managed bool) *ComputeAccessInfo {
 	if ssh, ok := ca.(*DomainSSHComputeAccess); ok {
-		return &ComputeAccessInfo{
+		info := &ComputeAccessInfo{
 			Type:            "ssh",
 			Host:            ssh.Host(),
 			User:            ssh.User(),
 			Path:            ssh.Root(),
 			ManagedWorktree: managed,
 		}
+		if ssh.ProxyCommand() != "" {
+			info.Metadata = map[string]string{
+				"proxy_command": ssh.ProxyCommand(),
+			}
+		}
+		return info
 	}
 	return &ComputeAccessInfo{
 		Type:            "local",
 		Path:            ca.Root(),
 		ManagedWorktree: managed,
 	}
+}
+
+// buildSSHComputeAccess constructs SSH compute access from an environment entry.
+// It resolves the SSH config template from the project config using store values,
+// or falls back to stored proxy_command in metadata, or direct host connection.
+func (m *Manager) BuildSSHComputeAccess(entry *EnvironmentEntry) ComputeAccess {
+	// Try to resolve proxy_command from config template + store
+	if m.config.Provisioner.Compute != nil && m.config.Provisioner.Compute.SSH != nil {
+		sshCfg := m.config.Provisioner.Compute.SSH
+		tmplCtx := &TemplateContext{Store: entry.Env}
+
+		proxyCmd, err := RenderTemplate(sshCfg.ProxyCommand, tmplCtx)
+		if err == nil && proxyCmd != "" {
+			user := entry.Compute.User
+			if sshCfg.User != "" {
+				if resolved, err := RenderTemplate(sshCfg.User, tmplCtx); err == nil {
+					user = resolved
+				}
+			}
+			root := entry.Compute.Path
+			if sshCfg.Root != "" {
+				if resolved, err := RenderTemplate(sshCfg.Root, tmplCtx); err == nil {
+					root = resolved
+				}
+			}
+			host := entry.Compute.Host
+			return NewDomainSSHComputeAccessWithOpts(SSHComputeAccessOpts{
+				Host:         host,
+				User:         user,
+				Root:         root,
+				ProxyCommand: proxyCmd,
+			})
+		}
+	}
+
+	// Fall back to stored proxy_command in metadata
+	if entry.Compute.Metadata != nil {
+		if proxyCmd, ok := entry.Compute.Metadata["proxy_command"]; ok && proxyCmd != "" {
+			return NewDomainSSHComputeAccessWithOpts(SSHComputeAccessOpts{
+				Host:         entry.Compute.Host,
+				User:         entry.Compute.User,
+				Root:         entry.Compute.Path,
+				ProxyCommand: proxyCmd,
+			})
+		}
+	}
+
+	// Direct mode
+	return NewDomainSSHComputeAccess(entry.Compute.Host, entry.Compute.User, entry.Compute.Path)
 }
 
 // ---------- Step ordering ----------
@@ -226,7 +286,12 @@ func (m *Manager) BuildProvisionerStepOrder() []string {
 
 // BuildRunnerStepOrder returns the canonical step order for the runner phase.
 func (m *Manager) BuildRunnerStepOrder() []string {
-	return []string{"runner_before", "generate_env", "start_infra", "runner_deploy", "runner_after"}
+	steps := []string{"runner_before", "generate_env", "start_infra"}
+	if m.config.Runner != nil && m.config.Runner.Compose != nil {
+		steps = append(steps, "generate_compose", "generate_nginx", "build_services", "start_services")
+	}
+	steps = append(steps, "runner_deploy", "runner_after")
+	return steps
 }
 
 // ---------- Output deserialization helpers ----------
@@ -264,8 +329,9 @@ func deserializeStringMap(v any) map[string]string {
 // ---------- Public lifecycle methods ----------
 
 // Init creates a new environment end-to-end: provisions then runs.
-func (m *Manager) Init(ctx context.Context, envName string, branch string) (*EnvironmentEntry, error) {
-	entry, err := m.Provision(ctx, envName, branch, "")
+// branch is the target branch. baseBranch is the branch to create from (empty = use branch as-is).
+func (m *Manager) Init(ctx context.Context, envName, branch, baseBranch string) (*EnvironmentEntry, error) {
+	entry, err := m.Provision(ctx, envName, branch, baseBranch, "")
 	if err != nil {
 		return nil, err
 	}
@@ -291,8 +357,8 @@ func (m *Manager) Attach(ctx context.Context, envName string, worktreePath strin
 
 // Provision runs the provisioner phase only. Does NOT run the runner.
 // fromStep invalidates that step and all subsequent steps, forcing re-execution.
-func (m *Manager) Provision(ctx context.Context, envName, branch, fromStep string) (*EnvironmentEntry, error) {
-	ca, manifest, entry, err := m.runProvisioner(ctx, envName, branch, "", true, fromStep)
+func (m *Manager) Provision(ctx context.Context, envName, branch, baseBranch, fromStep string) (*EnvironmentEntry, error) {
+	ca, manifest, entry, err := m.runProvisioner(ctx, envName, branch, baseBranch, "", true, fromStep)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +380,7 @@ func (m *Manager) ProvisionAttach(ctx context.Context, envName, worktreePath, fr
 		return nil, fmt.Errorf("environment '%s' is already running — use 'delete' first or choose a different name", envName)
 	}
 
-	ca, manifest, entry, err := m.runProvisioner(ctx, envName, branch, worktreePath, false, fromStep)
+	ca, manifest, entry, err := m.runProvisioner(ctx, envName, branch, "", worktreePath, false, fromStep)
 	if err != nil {
 		return nil, err
 	}
@@ -341,6 +407,312 @@ func (m *Manager) Run(ctx context.Context, manifestPath, fromStep string) error 
 	// For stateless run, entry is nil — no checkpointing
 	_, err = m.runRunner(ctx, manifest.EnvName, manifest.Branch, ca, manifest, false, false, nil)
 	return err
+}
+
+// RunStep executes a single runner-phase step in isolation.
+// Loads the environment from state, reconstructs compute access, reads the manifest,
+// and runs only the specified step (always executes, ignoring cache).
+func (m *Manager) RunStep(ctx context.Context, envName, stepName string) error {
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return fmt.Errorf("loading environment: %w", err)
+	}
+	if entry == nil {
+		return fmt.Errorf("environment '%s' not found", envName)
+	}
+
+	ca, manifest, err := m.loadManifestFromEntry(ctx, entry)
+	if err != nil {
+		return err
+	}
+
+	// Wire stderr through the progress reporter
+	if setter, ok := ca.(interface{ SetStderr(io.Writer) }); ok {
+		setter.SetStderr(m.progress.StderrWriter())
+	}
+
+	reg := newStepRegistry(m, entry, ca, manifest, envName, entry.Branch)
+	opts, err := reg.get(ctx, stepName)
+	if err != nil {
+		return err
+	}
+
+	// Force execution by temporarily disabling cache
+	origNoCache := m.noCache
+	m.noCache = true
+	defer func() { m.noCache = origNoCache }()
+
+	return m.step(ctx, entry, opts)
+}
+
+// RunSteps executes a sequence of runner steps in order, reusing a single
+// SSH connection and step registry. All steps are forced (cache bypassed).
+func (m *Manager) RunSteps(ctx context.Context, envName string, stepNames []string) error {
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return fmt.Errorf("loading environment: %w", err)
+	}
+	if entry == nil {
+		return fmt.Errorf("environment '%s' not found", envName)
+	}
+
+	ca, manifest, err := m.loadManifestFromEntry(ctx, entry)
+	if err != nil {
+		return err
+	}
+
+	if setter, ok := ca.(interface{ SetStderr(io.Writer) }); ok {
+		setter.SetStderr(m.progress.StderrWriter())
+	}
+
+	reg := newStepRegistry(m, entry, ca, manifest, envName, entry.Branch)
+
+	// Force execution by temporarily disabling cache
+	origNoCache := m.noCache
+	m.noCache = true
+	defer func() { m.noCache = origNoCache }()
+
+	for _, stepName := range stepNames {
+		opts, err := reg.get(ctx, stepName)
+		if err != nil {
+			return err
+		}
+		if err := m.step(ctx, entry, opts); err != nil {
+			return fmt.Errorf("step %s: %w", stepName, err)
+		}
+	}
+
+	return nil
+}
+
+// stepGeneratedFiles maps step names to the files they generate.
+var stepGeneratedFiles = map[string][]string{
+	"generate_compose": {".previewctl.compose.yaml"},
+	"generate_nginx":   {"preview/nginx.conf"},
+}
+
+// DryRunStep shows a diff of what a step would change.
+// For generation steps, compares the current file on the VM with what would be generated.
+// For other steps, describes what would happen.
+func (m *Manager) DryRunStep(ctx context.Context, envName, stepName string) (string, error) {
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return "", fmt.Errorf("loading environment: %w", err)
+	}
+	if entry == nil {
+		return "", fmt.Errorf("environment '%s' not found", envName)
+	}
+
+	ca, manifest, err := m.loadManifestFromEntry(ctx, entry)
+	if err != nil {
+		return "", err
+	}
+
+	generated, err := m.generateStepContent(manifest, entry, stepName)
+	if err != nil {
+		return "", err
+	}
+
+	// For file-generating steps, show a diff against the current remote content
+	if files, ok := stepGeneratedFiles[stepName]; ok {
+		var out strings.Builder
+		for i, relPath := range files {
+			newContent := ""
+			if i < len(generated) {
+				newContent = generated[i]
+			}
+
+			current, err := ca.ReadFile(ctx, relPath)
+			if err != nil {
+				// File doesn't exist yet — show as all new
+				fmt.Fprintf(&out, "--- %s (does not exist)\n+++ %s (generated)\n", relPath, relPath)
+				for _, line := range strings.Split(strings.TrimRight(newContent, "\n"), "\n") {
+					fmt.Fprintf(&out, "+ %s\n", line)
+				}
+				continue
+			}
+
+			currentStr := string(current)
+			if currentStr == newContent {
+				fmt.Fprintf(&out, "%s: no changes\n", relPath)
+				continue
+			}
+
+			fmt.Fprintf(&out, "--- %s (current)\n+++ %s (generated)\n", relPath, relPath)
+			out.WriteString(unifiedDiff(currentStr, newContent))
+		}
+		return out.String(), nil
+	}
+
+	// For env generation, diff each file
+	if stepName == "generate_env" {
+		envFiles := manifest.EnvFilePaths()
+		var out strings.Builder
+		for relPath, envVars := range envFiles {
+			newContent := string(RenderEnvFileContent(envVars))
+			current, err := ca.ReadFile(ctx, relPath)
+			if err != nil {
+				fmt.Fprintf(&out, "--- %s (does not exist)\n+++ %s (generated)\n", relPath, relPath)
+				for _, line := range strings.Split(strings.TrimRight(newContent, "\n"), "\n") {
+					fmt.Fprintf(&out, "+ %s\n", line)
+				}
+				out.WriteString("\n")
+				continue
+			}
+			currentStr := string(current)
+			if currentStr == newContent {
+				fmt.Fprintf(&out, "%s: no changes\n", relPath)
+				continue
+			}
+			fmt.Fprintf(&out, "--- %s (current)\n+++ %s (generated)\n", relPath, relPath)
+			out.WriteString(unifiedDiff(currentStr, newContent))
+			out.WriteString("\n")
+		}
+		return out.String(), nil
+	}
+
+	// Non-generation steps — describe what would happen
+	if len(generated) > 0 {
+		return generated[0], nil
+	}
+	return fmt.Sprintf("Step '%s' is hook-owned — dry run not available.\n", stepName), nil
+}
+
+// PrintStep generates and returns the full content for a step without executing it.
+func (m *Manager) PrintStep(ctx context.Context, envName, stepName string) (string, error) {
+	entry, err := m.state.GetEnvironment(ctx, envName)
+	if err != nil {
+		return "", fmt.Errorf("loading environment: %w", err)
+	}
+	if entry == nil {
+		return "", fmt.Errorf("environment '%s' not found", envName)
+	}
+
+	_, manifest, err := m.loadManifestFromEntry(ctx, entry)
+	if err != nil {
+		return "", err
+	}
+
+	generated, err := m.generateStepContent(manifest, entry, stepName)
+	if err != nil {
+		return "", err
+	}
+
+	// For env generation, include file headers
+	if stepName == "generate_env" {
+		envFiles := manifest.EnvFilePaths()
+		var out strings.Builder
+		for relPath, envVars := range envFiles {
+			fmt.Fprintf(&out, "# %s\n", relPath)
+			out.Write(RenderEnvFileContent(envVars))
+			out.WriteString("\n")
+		}
+		return out.String(), nil
+	}
+
+	return strings.Join(generated, "\n"), nil
+}
+
+// generateStepContent computes the content a step would produce.
+func (m *Manager) generateStepContent(manifest *Manifest, entry *EnvironmentEntry, stepName string) ([]string, error) {
+	switch stepName {
+	case "generate_compose":
+		data, err := GenerateComposeFile(m.config, manifest)
+		if err != nil {
+			return nil, err
+		}
+		return []string{string(data)}, nil
+
+	case "generate_nginx":
+		if m.config.Runner == nil || m.config.Runner.Compose == nil || !m.config.Runner.Compose.Proxy.IsEnabled() {
+			return []string{"# nginx proxy not enabled\n"}, nil
+		}
+		manifest.EnabledServices = entry.EnabledServices
+		domain := m.config.Runner.Compose.Proxy.Domain
+		data, err := GenerateNginxConfig(m.config, manifest, domain)
+		if err != nil {
+			return nil, err
+		}
+		return []string{string(data)}, nil
+
+	case "generate_env":
+		return nil, nil // handled specially by callers
+
+	case "build_services":
+		services := entry.EnabledServices
+		if len(services) == 0 && m.config.Runner != nil && m.config.Runner.Compose != nil {
+			services = m.config.Runner.Compose.Autostart
+		}
+		var out strings.Builder
+		fmt.Fprintln(&out, "Would build:")
+		for _, svcName := range services {
+			svc, ok := m.config.Services[svcName]
+			if !ok || svc.Build == "" {
+				continue
+			}
+			fmt.Fprintf(&out, "  %s: %s\n", svcName, svc.Build)
+		}
+		return []string{out.String()}, nil
+
+	case "start_services":
+		services := entry.EnabledServices
+		if len(services) == 0 && m.config.Runner != nil && m.config.Runner.Compose != nil {
+			services = m.config.Runner.Compose.Autostart
+		}
+		var out strings.Builder
+		fmt.Fprintln(&out, "Would start:")
+		if m.config.Runner != nil && m.config.Runner.Compose != nil && m.config.Runner.Compose.Proxy.IsEnabled() {
+			fmt.Fprintf(&out, "  %s (proxy)\n", m.config.Runner.Compose.Proxy.ResolvedType())
+		}
+		for _, svcName := range services {
+			fmt.Fprintf(&out, "  %s\n", svcName)
+		}
+		return []string{out.String()}, nil
+
+	case "start_infra":
+		composeFile := ""
+		if manifest.Infrastructure != nil {
+			composeFile = manifest.Infrastructure.ComposeFile
+		}
+		if composeFile == "" {
+			return []string{"No infrastructure compose file configured\n"}, nil
+		}
+		return []string{fmt.Sprintf("Would run: docker compose -f %s up -d\n", composeFile)}, nil
+
+	default:
+		return []string{fmt.Sprintf("Step '%s' is hook-owned — preview not available.\n", stepName)}, nil
+	}
+}
+
+// unifiedDiff produces a simple line-based diff showing added/removed lines.
+func unifiedDiff(a, b string) string {
+	aLines := strings.Split(strings.TrimRight(a, "\n"), "\n")
+	bLines := strings.Split(strings.TrimRight(b, "\n"), "\n")
+
+	// Simple LCS-based diff
+	aSet := make(map[string]bool, len(aLines))
+	for _, line := range aLines {
+		aSet[line] = true
+	}
+	bSet := make(map[string]bool, len(bLines))
+	for _, line := range bLines {
+		bSet[line] = true
+	}
+
+	var out strings.Builder
+	// Lines removed (in a but not in b)
+	for _, line := range aLines {
+		if !bSet[line] {
+			fmt.Fprintf(&out, "- %s\n", line)
+		}
+	}
+	// Lines added (in b but not in a)
+	for _, line := range bLines {
+		if !aSet[line] {
+			fmt.Fprintf(&out, "+ %s\n", line)
+		}
+	}
+	return out.String()
 }
 
 // SetStatus updates an environment's status.
@@ -376,26 +748,31 @@ func (m *Manager) saveProvisionedState(ctx context.Context, envName, branch stri
 	return entry, nil
 }
 
-func (m *Manager) loadManifestFromEntry(_ context.Context, entry *EnvironmentEntry) (ComputeAccess, *Manifest, error) {
-	wtPath := entry.WorktreePath()
-	if wtPath == "" {
-		return nil, nil, fmt.Errorf("environment '%s' has no compute path", entry.Name)
+func (m *Manager) loadManifestFromEntry(ctx context.Context, entry *EnvironmentEntry) (ComputeAccess, *Manifest, error) {
+	if entry.Compute == nil {
+		return nil, nil, fmt.Errorf("environment '%s' has no compute info", entry.Name)
 	}
-	manifestPath := filepath.Join(wtPath, ".previewctl.json")
-	data, err := os.ReadFile(manifestPath)
+
+	var ca ComputeAccess
+	if entry.Compute.Type == "ssh" {
+		ca = m.BuildSSHComputeAccess(entry)
+	} else {
+		ca = NewDomainLocalComputeAccess(entry.Compute.Path)
+	}
+
+	data, err := ca.ReadFile(ctx, ".previewctl.json")
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading manifest from %s: %w", manifestPath, err)
+		return nil, nil, fmt.Errorf("reading manifest from compute: %w", err)
 	}
 	manifest, err := ReadManifest(bytes.NewReader(data))
 	if err != nil {
 		return nil, nil, fmt.Errorf("parsing manifest: %w", err)
 	}
-	ca := NewDomainLocalComputeAccess(wtPath)
 	return ca, manifest, nil
 }
 
 // runProvisioner executes the provisioner phase with step-level checkpointing.
-func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingWorktree string, createWorktree bool, fromStep string) (ComputeAccess, *Manifest, *EnvironmentEntry, error) {
+func (m *Manager) runProvisioner(ctx context.Context, envName, branch, baseBranch, existingWorktree string, createWorktree bool, fromStep string) (ComputeAccess, *Manifest, *EnvironmentEntry, error) {
 	// Load or create entry for checkpointing
 	entry, err := m.state.GetEnvironment(ctx, envName)
 	if err != nil {
@@ -404,6 +781,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 	if entry == nil {
 		entry = &EnvironmentEntry{
 			Name:      envName,
+			Mode:      EnvironmentMode(m.config.Mode),
 			Branch:    branch,
 			Status:    StatusCreating,
 			CreatedAt: time.Now(),
@@ -432,9 +810,9 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			StartMsg:    fmt.Sprintf("Running provisioner.before → %s", m.config.Provisioner.Before),
 			CompleteMsg: &beforeMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "provisioner_before", Status: StepStreaming})
-				env := m.buildHookEnv(envName, existingWorktree, nil)
-				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot)
+				m.progress.OnStep(StepEvent{Step: "provisioner_before", Status: StepStreaming, Message: fmt.Sprintf("Running provisioner.before → %s", m.config.Provisioner.Before)})
+				env := m.buildHookEnv(envName, existingWorktree, nil, entry.Env)
+				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Before, nil, env, m.projectRoot, m.progress.StderrWriter())
 				return err
 			},
 		}); err != nil {
@@ -449,7 +827,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 		var computeOutputs map[string]string
 		// Try to load cached compute info
 		if entry.Compute != nil && entry.Compute.Type == "ssh" && entry.StepCompleted("create_compute") {
-			ca = NewDomainSSHComputeAccess(entry.Compute.Host, entry.Compute.User, entry.Compute.Path)
+			ca = m.BuildSSHComputeAccess(entry)
 		}
 		createMsg := "Compute created via hook"
 		if err := m.step(ctx, entry, StepOpts{
@@ -457,12 +835,15 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			StartMsg:    "Creating remote compute...",
 			CompleteMsg: &createMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "create_compute", Status: StepStreaming})
-				env := m.buildHookEnv(envName, "", nil)
+				m.progress.OnStep(StepEvent{Step: "create_compute", Status: StepStreaming, Message: "Creating remote compute..."})
+				env := m.buildHookEnv(envName, "", nil, entry.Env)
 				env = append(env, fmt.Sprintf("PREVIEWCTL_BRANCH=%s", branch))
+				if baseBranch != "" {
+					env = append(env, fmt.Sprintf("PREVIEWCTL_BASE_BRANCH=%s", baseBranch))
+				}
 				var err error
 				computeOutputs, err = ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Create,
-					m.config.Provisioner.Compute.Outputs, env, m.projectRoot)
+					m.config.Provisioner.Compute.Outputs, env, m.projectRoot, m.progress.StderrWriter())
 				return err
 			},
 			Verify: func(ctx context.Context) error {
@@ -508,7 +889,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			CompleteMsg: msg("Compute resources created"),
 			Fn: func() error {
 				var err error
-				resources, err = m.compute.Create(ctx, envName, branch)
+				resources, err = m.compute.Create(ctx, envName, branch, baseBranch)
 				return err
 			},
 			Verify: func(ctx context.Context) error {
@@ -532,6 +913,11 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 		}
 	}
 
+	// Wire stderr through the progress reporter for indented output
+	if setter, ok := ca.(interface{ SetStderr(io.Writer) }); ok {
+		setter.SetStderr(m.progress.StderrWriter())
+	}
+
 	// 4. Allocate ports
 	var ports PortMap
 	// Load cached ports if step was completed
@@ -549,7 +935,16 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 		Fn: func() error {
 			var err error
 			ports, err = m.networking.AllocatePorts(envName)
-			return err
+			if err != nil {
+				return err
+			}
+			// Override with fixed ports from config
+			for name, svc := range m.config.Services {
+				if svc.Port != 0 {
+					ports[name] = svc.Port
+				}
+			}
+			return nil
 		},
 		Outputs: func() map[string]any {
 			return map[string]any{"ports": ports}
@@ -580,7 +975,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			StartMsg:    fmt.Sprintf("Seeding %s → %s", svcName, svc.Seed),
 			CompleteMsg: &seedMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: stepName, Status: StepStreaming})
+				m.progress.OnStep(StepEvent{Step: stepName, Status: StepStreaming, Message: fmt.Sprintf("Seeding %s → %s", svcNameCopy, svc.Seed)})
 				outputs, err := m.runCoreHook(ctx, svcNameCopy, "seed", envName, ports)
 				if err != nil {
 					return err
@@ -608,7 +1003,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 		CompleteMsg: msg("Manifest built"),
 		Fn: func() error {
 			var err error
-			manifest, err = BuildManifest(m.config, envName, branch, mode, ports, provisionerOutputs)
+			manifest, err = BuildManifest(m.config, envName, branch, mode, ports, provisionerOutputs, entry.Env)
 			return err
 		},
 	}); err != nil {
@@ -617,7 +1012,7 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 	// If build_manifest was skipped, we still need the manifest object
 	if manifest == nil {
 		var err error
-		manifest, err = BuildManifest(m.config, envName, branch, mode, ports, provisionerOutputs)
+		manifest, err = BuildManifest(m.config, envName, branch, mode, ports, provisionerOutputs, entry.Env)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("rebuilding manifest after cache: %w", err)
 		}
@@ -647,9 +1042,9 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 			StartMsg:    fmt.Sprintf("Running provisioner.after → %s", m.config.Provisioner.After),
 			CompleteMsg: &afterMsg,
 			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "provisioner_after", Status: StepStreaming})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
-				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.After, nil, env, m.projectRoot)
+				m.progress.OnStep(StepEvent{Step: "provisioner_after", Status: StepStreaming, Message: fmt.Sprintf("Running provisioner.after → %s", m.config.Provisioner.After)})
+				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports, entry.Env)
+				_, err := ExecuteCoreHook(ctx, m.config.Provisioner.After, nil, env, m.projectRoot, m.progress.StderrWriter())
 				return err
 			},
 		}); err != nil {
@@ -663,133 +1058,62 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, existingW
 // runRunner executes the runner phase with optional checkpointing.
 // When entry is nil, no checkpointing occurs (stateless mode).
 func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca ComputeAccess, manifest *Manifest, managedWorktree, saveState bool, entry *EnvironmentEntry) (*EnvironmentEntry, error) {
+	// Wire stderr through the progress reporter
+	if setter, ok := ca.(interface{ SetStderr(io.Writer) }); ok {
+		setter.SetStderr(m.progress.StderrWriter())
+	}
+
+	// Use the step registry for all runner steps
+	reg := newStepRegistry(m, entry, ca, manifest, envName, branch)
+
 	// 0. Sync code on re-runs (pull latest from remote)
-	// Only runs when the runner has already completed before (re-run, not first create).
-	// Runs directly (not via step()) so it always executes — the point is to pull fresh code.
 	if entry != nil && entry.StepCompleted("runner_before") {
-		m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepStarted, Message: fmt.Sprintf("Syncing code to origin/%s...", branch)})
-		syncCmd := fmt.Sprintf("git fetch origin && git reset --hard origin/%s", branch)
-		if _, err := ca.Exec(ctx, syncCmd, nil); err != nil {
-			m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepFailed, Message: err.Error()})
+		syncOpts := reg.syncCode(ctx)
+		m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepStarted, Message: syncOpts.StartMsg})
+		if err := syncOpts.Fn(); err != nil {
+			m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepFailed, Error: err})
 			return nil, fmt.Errorf("syncing code: %w", err)
 		}
-		m.progress.OnStep(StepEvent{Step: "sync_code", Status: StepCompleted, Message: "Code synced to latest"})
+		m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepCompleted, Message: *syncOpts.CompleteMsg})
 	}
 
-	// 1. runner.before hook
-	if m.config.Runner != nil && m.config.Runner.Before != "" {
-		beforeMsg := fmt.Sprintf("Ran runner.before (%s)", m.config.Runner.Before)
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "runner_before",
-			StartMsg:    fmt.Sprintf("Running runner.before → %s", m.config.Runner.Before),
-			CompleteMsg: &beforeMsg,
-			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_before", Status: StepStreaming})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
-				_, err := ca.Exec(ctx, m.config.Runner.Before, env)
-				return err
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("runner before hook: %w", err)
-		}
+	// 1-2. runner.before + generate_env
+	if err := m.step(ctx, entry, reg.runnerBefore(ctx)); err != nil {
+		return nil, fmt.Errorf("runner before hook: %w", err)
 	}
-
-	// 2. Generate .env files from manifest
-	envFiles := manifest.EnvFilePaths()
-	if len(envFiles) > 0 {
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "generate_env",
-			StartMsg:    "Generating .env files...",
-			CompleteMsg: msg(".env files generated"),
-			Fn: func() error {
-				for relPath, envVars := range envFiles {
-					content := RenderEnvFileContent(envVars)
-					if err := ca.WriteFile(ctx, relPath, content, 0o644); err != nil {
-						return fmt.Errorf("writing %s: %w", relPath, err)
-					}
-				}
-				return nil
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("generating env files: %w", err)
-		}
+	if err := m.step(ctx, entry, reg.generateEnv(ctx)); err != nil {
+		return nil, fmt.Errorf("generating env files: %w", err)
 	}
 
 	// 3. Start per-env infrastructure
-	if err := m.step(ctx, entry, StepOpts{
-		Name:        "start_infra",
-		StartMsg:    "Starting infrastructure containers...",
-		CompleteMsg: msg("Infrastructure containers started"),
-		Fn: func() error {
-			composeFile := ""
-			if manifest.Infrastructure != nil {
-				composeFile = manifest.Infrastructure.ComposeFile
-			}
-			if composeFile == "" {
-				return nil
-			}
-			env := BuildComposeEnv(m.config.Name, envName, manifest.Ports)
-			cmd := fmt.Sprintf("docker compose -f %s up -d", composeFile)
-			_, err := ca.Exec(ctx, cmd, env)
-			return err
-		},
-		Verify: func(ctx context.Context) error {
-			composeFile := ""
-			if manifest.Infrastructure != nil {
-				composeFile = manifest.Infrastructure.ComposeFile
-			}
-			if composeFile == "" {
-				return nil
-			}
-			projectName := ComposeProjectName(m.config.Name, envName)
-			cmd := fmt.Sprintf("docker compose -f %s -p %s ps --format json", composeFile, projectName)
-			out, err := ca.Exec(ctx, cmd, nil)
-			if err != nil {
-				return err
-			}
-			if len(strings.TrimSpace(out)) == 0 {
-				return fmt.Errorf("infrastructure not running")
-			}
-			return nil
-		},
-	}); err != nil {
+	if err := m.step(ctx, entry, reg.startInfra(ctx)); err != nil {
 		return nil, fmt.Errorf("starting infrastructure: %w", err)
 	}
 
-	// 4. runner.deploy hook
-	if m.config.Runner != nil && m.config.Runner.Deploy != "" {
-		deployMsg := fmt.Sprintf("Ran runner.deploy (%s)", m.config.Runner.Deploy)
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "runner_deploy",
-			StartMsg:    fmt.Sprintf("Running runner.deploy → %s", m.config.Runner.Deploy),
-			CompleteMsg: &deployMsg,
-			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_deploy", Status: StepStreaming})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
-				_, err := ca.Exec(ctx, m.config.Runner.Deploy, env)
-				return err
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("runner deploy hook: %w", err)
+	// 4-7. Compose-managed services
+	if m.config.Runner != nil && m.config.Runner.Compose != nil {
+		if err := m.step(ctx, entry, reg.generateCompose(ctx)); err != nil {
+			return nil, fmt.Errorf("generating compose file: %w", err)
+		}
+		if m.config.Runner.Compose.Proxy.IsEnabled() {
+			if err := m.step(ctx, entry, reg.generateNginx(ctx)); err != nil {
+				return nil, fmt.Errorf("generating nginx config: %w", err)
+			}
+		}
+		if err := m.step(ctx, entry, reg.buildServices(ctx)); err != nil {
+			return nil, fmt.Errorf("building services: %w", err)
+		}
+		if err := m.step(ctx, entry, reg.startServices(ctx)); err != nil {
+			return nil, fmt.Errorf("starting services: %w", err)
 		}
 	}
 
-	// 5. runner.after hook
-	if m.config.Runner != nil && m.config.Runner.After != "" {
-		afterMsg := fmt.Sprintf("Ran runner.after (%s)", m.config.Runner.After)
-		if err := m.step(ctx, entry, StepOpts{
-			Name:        "runner_after",
-			StartMsg:    fmt.Sprintf("Running runner.after → %s", m.config.Runner.After),
-			CompleteMsg: &afterMsg,
-			Fn: func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_after", Status: StepStreaming})
-				env := m.buildHookEnv(envName, ca.Root(), manifest.Ports)
-				_, err := ca.Exec(ctx, m.config.Runner.After, env)
-				return err
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("runner after hook: %w", err)
-		}
+	// 8-9. Deploy and after hooks
+	if err := m.step(ctx, entry, reg.runnerDeploy(ctx)); err != nil {
+		return nil, fmt.Errorf("runner deploy hook: %w", err)
+	}
+	if err := m.step(ctx, entry, reg.runnerAfter(ctx)); err != nil {
+		return nil, fmt.Errorf("runner after hook: %w", err)
 	}
 
 	// 6. Save state
@@ -843,7 +1167,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 	if entry.Compute != nil {
 		switch entry.Compute.Type {
 		case "ssh":
-			ca = NewDomainSSHComputeAccess(entry.Compute.Host, entry.Compute.User, entry.Compute.Path)
+			ca = m.BuildSSHComputeAccess(entry)
 		case "local":
 			if entry.Compute.Path != "" {
 				ca = NewDomainLocalComputeAccess(entry.Compute.Path)
@@ -858,8 +1182,8 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 			fmt.Sprintf("Running runner.destroy → %s", m.config.Runner.Destroy),
 			&destroyMsg,
 			func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_destroy", Status: StepStreaming})
-				env := m.buildHookEnv(envName, ca.Root(), entry.Ports)
+				m.progress.OnStep(StepEvent{Step: "runner_destroy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.destroy → %s", m.config.Runner.Destroy)})
+				env := m.buildHookEnv(envName, ca.Root(), entry.Ports, entry.Env)
 				_, err := ca.Exec(ctx, m.config.Runner.Destroy, env)
 				return err
 			}); err != nil {
@@ -877,8 +1201,8 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 			fmt.Sprintf("Running destroy hook for %s...", svcName),
 			&destroyMsg,
 			func() error {
-				m.progress.OnStep(StepEvent{Step: fmt.Sprintf("destroy_core_%s", svcName), Status: StepStreaming})
-				_, err := m.runCoreHook(ctx, svcName, "destroy", envName, entry.Ports)
+				m.progress.OnStep(StepEvent{Step: fmt.Sprintf("destroy_core_%s", svcName), Status: StepStreaming, Message: fmt.Sprintf("Running destroy hook for %s...", svcName)})
+				_, err := m.runCoreHook(ctx, svcName, "destroy", envName, entry.Ports, entry.Env)
 				return err
 			}); err != nil {
 			return fmt.Errorf("destroying provisioner service %s: %w", svcName, err)
@@ -889,15 +1213,15 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 	if m.config.Provisioner.Compute != nil && m.config.Provisioner.Compute.Destroy != "" {
 		destroyMsg := "Compute destroyed via hook"
 		if err := m.stepSimple(ctx, "destroy_compute_hook", "Destroying remote compute...", &destroyMsg, func() error {
-			m.progress.OnStep(StepEvent{Step: "destroy_compute_hook", Status: StepStreaming})
-			env := m.buildHookEnv(envName, "", entry.Ports)
+			m.progress.OnStep(StepEvent{Step: "destroy_compute_hook", Status: StepStreaming, Message: "Destroying remote compute..."})
+			env := m.buildHookEnv(envName, "", entry.Ports, entry.Env)
 			if entry.Compute != nil {
 				env = append(env,
 					fmt.Sprintf("PREVIEWCTL_VM_IP=%s", entry.Compute.Host),
 					fmt.Sprintf("PREVIEWCTL_SSH_USER=%s", entry.Compute.User),
 				)
 			}
-			_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Destroy, nil, env, m.projectRoot)
+			_, err := ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Destroy, nil, env, m.projectRoot, m.progress.StderrWriter())
 			return err
 		}); err != nil {
 			return fmt.Errorf("compute destroy hook: %w", err)
@@ -954,6 +1278,16 @@ func (m *Manager) List(ctx context.Context) ([]*EnvironmentEntry, error) {
 	return entries, nil
 }
 
+// GetEnvironment returns a single environment entry from state, or nil if not found.
+func (m *Manager) GetEnvironment(ctx context.Context, envName string) (*EnvironmentEntry, error) {
+	return m.state.GetEnvironment(ctx, envName)
+}
+
+// SaveEnvironment persists an environment entry to state.
+func (m *Manager) SaveEnvironment(ctx context.Context, envName string, entry *EnvironmentEntry) error {
+	return m.state.SetEnvironment(ctx, envName, entry)
+}
+
 func (m *Manager) Status(ctx context.Context, envName string) (*EnvironmentDetail, error) {
 	entry, err := m.state.GetEnvironment(ctx, envName)
 	if err != nil {
@@ -983,7 +1317,7 @@ func (m *Manager) RunCoreHook(ctx context.Context, svcName, action, envName stri
 	return m.runCoreHook(ctx, svcName, action, envName, ports)
 }
 
-func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName string, ports PortMap) (map[string]string, error) {
+func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName string, ports PortMap, store ...map[string]string) (map[string]string, error) {
 	svc, ok := m.config.Provisioner.Services[svcName]
 	if !ok {
 		return nil, fmt.Errorf("unknown provisioner service '%s'", svcName)
@@ -1014,19 +1348,27 @@ func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName stri
 		env = append(env, fmt.Sprintf("PREVIEWCTL_PORT_%s=%d",
 			strings.ToUpper(strings.ReplaceAll(name, "-", "_")), port))
 	}
+	// Inject persistent store values
+	if len(store) > 0 && store[0] != nil {
+		for k, v := range store[0] {
+			env = append(env, fmt.Sprintf("PREVIEWCTL_STORE_%s=%s",
+				strings.ToUpper(strings.ReplaceAll(k, "-", "_")), v))
+		}
+	}
 	var requiredOutputs []string
 	if action == "seed" || action == "reset" {
 		requiredOutputs = svc.Outputs
 	}
-	return ExecuteCoreHook(ctx, hookScript, requiredOutputs, env, m.projectRoot)
+	return ExecuteCoreHook(ctx, hookScript, requiredOutputs, env, m.projectRoot, m.progress.StderrWriter())
 }
 
-func (m *Manager) buildHookEnv(envName, worktreePath string, ports PortMap) []string {
+func (m *Manager) buildHookEnv(envName, worktreePath string, ports PortMap, envStore ...map[string]string) []string {
 	env := append(os.Environ(),
 		fmt.Sprintf("PREVIEWCTL_ENV_NAME=%s", envName),
 		fmt.Sprintf("PREVIEWCTL_ENVIRONMENT_NAME=%s", SanitizeName(envName)),
 		fmt.Sprintf("PREVIEWCTL_PROJECT_NAME=%s", m.config.Name),
 		fmt.Sprintf("PREVIEWCTL_PROJECT_ROOT=%s", m.projectRoot),
+		fmt.Sprintf("PREVIEWCTL_MODE=%s", m.config.Mode),
 	)
 	if worktreePath != "" {
 		env = append(env, fmt.Sprintf("PREVIEWCTL_WORKTREE_PATH=%s", worktreePath))
@@ -1034,6 +1376,13 @@ func (m *Manager) buildHookEnv(envName, worktreePath string, ports PortMap) []st
 	for name, port := range ports {
 		env = append(env, fmt.Sprintf("PREVIEWCTL_PORT_%s=%d",
 			strings.ToUpper(strings.ReplaceAll(name, "-", "_")), port))
+	}
+	// Inject persistent store values as PREVIEWCTL_STORE_{KEY}
+	if len(envStore) > 0 && envStore[0] != nil {
+		for k, v := range envStore[0] {
+			env = append(env, fmt.Sprintf("PREVIEWCTL_STORE_%s=%s",
+				strings.ToUpper(strings.ReplaceAll(k, "-", "_")), v))
+		}
 	}
 	return env
 }
@@ -1051,7 +1400,7 @@ func (m *Manager) CoreInit(ctx context.Context, svcName string) error {
 		fmt.Sprintf("Running init hook for %s...", svcName),
 		&initMsg,
 		func() error {
-			m.progress.OnStep(StepEvent{Step: "core_init", Status: StepStreaming})
+			m.progress.OnStep(StepEvent{Step: "core_init", Status: StepStreaming, Message: fmt.Sprintf("Running init hook for %s...", svcName)})
 			_, err := m.runCoreHook(ctx, svcName, "init", "", nil)
 			return err
 		}); err != nil {
@@ -1080,7 +1429,7 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 		fmt.Sprintf("Running reset hook for %s...", svcName),
 		&resetMsg,
 		func() error {
-			m.progress.OnStep(StepEvent{Step: "core_reset", Status: StepStreaming})
+			m.progress.OnStep(StepEvent{Step: "core_reset", Status: StepStreaming, Message: fmt.Sprintf("Running reset hook for %s...", svcName)})
 			outputs, err := m.runCoreHook(ctx, svcName, "reset", envName, entry.Ports)
 			if err != nil {
 				return err
@@ -1102,12 +1451,15 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 // ---------- DomainLocalComputeAccess ----------
 
 type DomainLocalComputeAccess struct {
-	root string
+	root   string
+	stderr io.Writer
 }
 
 func NewDomainLocalComputeAccess(root string) ComputeAccess {
-	return &DomainLocalComputeAccess{root: root}
+	return &DomainLocalComputeAccess{root: root, stderr: os.Stderr}
 }
+
+func (l *DomainLocalComputeAccess) SetStderr(w io.Writer) { l.stderr = w }
 
 func (l *DomainLocalComputeAccess) WriteFile(_ context.Context, relPath string, data []byte, mode os.FileMode) error {
 	absPath := filepath.Join(l.root, relPath)
@@ -1129,7 +1481,7 @@ func (l *DomainLocalComputeAccess) Exec(ctx context.Context, command string, env
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = l.root
 	cmd.Env = env
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = l.stderr
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {

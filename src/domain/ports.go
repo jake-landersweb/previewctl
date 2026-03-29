@@ -2,6 +2,8 @@ package domain
 
 import (
 	"context"
+	"io"
+	"os"
 )
 
 // ComputePort manages the compute substrate for an environment.
@@ -10,7 +12,9 @@ import (
 // Sandbox: isolated VM with network policies.
 type ComputePort interface {
 	// Create sets up compute resources for an environment.
-	Create(ctx context.Context, envName string, branch string) (*ComputeResources, error)
+	// branch is the target branch to use/create.
+	// baseBranch is the branch to create from (empty = use branch as-is).
+	Create(ctx context.Context, envName string, branch string, baseBranch string) (*ComputeResources, error)
 
 	// Start starts per-environment services (infra containers, etc).
 	Start(ctx context.Context, envName string, ports PortMap) error
@@ -62,9 +66,13 @@ type StatePort interface {
 // Inbound adapters implement this to render progress (CLI spinners, SSE, etc).
 type ProgressReporter interface {
 	OnStep(event StepEvent)
+	// StderrWriter returns a writer for hook stderr output.
+	// The reporter may indent or buffer this output for display.
+	StderrWriter() io.Writer
 }
 
 // NoopReporter is a ProgressReporter that discards all events.
 type NoopReporter struct{}
 
-func (NoopReporter) OnStep(StepEvent) {}
+func (NoopReporter) OnStep(StepEvent)        {}
+func (NoopReporter) StderrWriter() io.Writer { return os.Stderr }

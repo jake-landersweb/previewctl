@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,13 +12,16 @@ import (
 
 // LocalComputeAccess implements domain.ComputeAccess for local filesystem operations.
 type LocalComputeAccess struct {
-	root string
+	root   string
+	stderr io.Writer
 }
 
 // NewLocalComputeAccess creates a ComputeAccess backed by a local filesystem path.
 func NewLocalComputeAccess(root string) *LocalComputeAccess {
-	return &LocalComputeAccess{root: root}
+	return &LocalComputeAccess{root: root, stderr: os.Stderr}
 }
+
+func (l *LocalComputeAccess) SetStderr(w io.Writer) { l.stderr = w }
 
 func (l *LocalComputeAccess) WriteFile(_ context.Context, relPath string, data []byte, mode os.FileMode) error {
 	absPath := filepath.Join(l.root, relPath)
@@ -35,7 +39,7 @@ func (l *LocalComputeAccess) Exec(ctx context.Context, command string, env []str
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = l.root
 	cmd.Env = env
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = l.stderr
 
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
