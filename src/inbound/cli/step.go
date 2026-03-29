@@ -9,17 +9,17 @@ import (
 
 // runnerSteps lists valid steps for isolated execution.
 var runnerSteps = map[string]bool{
-	"sync_code":          true,
-	"generate_manifest":  true,
-	"runner_before":      true,
-	"generate_env":       true,
-	"start_infra":      true,
-	"generate_compose": true,
-	"generate_nginx":   true,
-	"build_services":   true,
-	"start_services":   true,
-	"runner_deploy":    true,
-	"runner_after":     true,
+	"sync_code":         true,
+	"generate_manifest": true,
+	"runner_before":     true,
+	"generate_env":      true,
+	"start_infra":       true,
+	"generate_compose":  true,
+	"generate_nginx":    true,
+	"build_services":    true,
+	"start_services":    true,
+	"runner_deploy":     true,
+	"runner_after":      true,
 }
 
 func newStepCmd() *cobra.Command {
@@ -77,7 +77,7 @@ Available steps:
 				if err != nil {
 					return err
 				}
-				fmt.Fprint(os.Stdout, output)
+				_, _ = fmt.Fprint(os.Stdout, output)
 				return nil
 			}
 
@@ -97,7 +97,7 @@ Available steps:
 					return err
 				}
 
-				fmt.Fprint(os.Stdout, output)
+				_, _ = fmt.Fprint(os.Stdout, output)
 				return nil
 			}
 

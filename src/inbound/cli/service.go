@@ -422,4 +422,3 @@ func trackServiceDisabled(cmd *cobra.Command, svcName string) error {
 	entry.DisableService(svcName)
 	return mgr.SaveEnvironment(cmd.Context(), envName, entry)
 }
-

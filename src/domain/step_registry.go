@@ -296,9 +296,9 @@ func (r *stepRegistry) buildServices(ctx context.Context) StepOpts {
 				return nil
 			}
 			stderr := r.m.progress.StderrWriter()
-			fmt.Fprintf(stderr, "    Services: %s\n", strings.Join(names, ", "))
+			_, _ = fmt.Fprintf(stderr, "    Services: %s\n", strings.Join(names, ", "))
 			for i, cmd := range cmds {
-				fmt.Fprintf(stderr, "    [%d/%d] %s\n", i+1, len(cmds), cmd)
+				_, _ = fmt.Fprintf(stderr, "    [%d/%d] %s\n", i+1, len(cmds), cmd)
 			}
 			_, err := r.ca.Exec(ctx, strings.Join(cmds, " && "), nil)
 			return err
