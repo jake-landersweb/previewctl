@@ -94,21 +94,34 @@ func (s *DomainSSHComputeAccess) ReadFile(ctx context.Context, relPath string) (
 }
 
 func (s *DomainSSHComputeAccess) Exec(ctx context.Context, command string, env []string) (string, error) {
-	// Only export previewctl-relevant vars to the remote — skip the local OS
-	// environment which may contain paths/values that break the remote shell.
-	var envPrefix strings.Builder
+	// Write environment variables to a temp file on the remote host, then source
+	// it before running the command. This avoids SSH command-line length limits
+	// that can silently truncate long inline export chains.
+	const remoteEnvFile = "/tmp/.previewctl-env.sh"
+
+	var envContent strings.Builder
 	for _, e := range env {
 		if strings.HasPrefix(e, "PREVIEWCTL_") ||
 			strings.HasPrefix(e, "COMPOSE_") ||
 			strings.HasSuffix(strings.SplitN(e, "=", 2)[0], "_PORT") {
-			fmt.Fprintf(&envPrefix, "export %s; ", e)
+			fmt.Fprintf(&envContent, "export %s\n", e)
 		}
 	}
 
-	innerCmd := fmt.Sprintf("set -a; [ -f /etc/environment ] && . /etc/environment; set +a; cd %q && %s%s", s.root, envPrefix.String(), command)
-	remoteCmd := fmt.Sprintf("bash -c %q", innerCmd)
+	if envContent.Len() > 0 {
+		writeCmd := s.sshCmd(ctx, fmt.Sprintf("cat > %s", remoteEnvFile))
+		writeCmd.Stdin = strings.NewReader(envContent.String())
+		writeCmd.Stderr = s.stderr
+		if err := writeCmd.Run(); err != nil {
+			return "", fmt.Errorf("writing remote env file: %w", err)
+		}
+	}
+
+	remoteCmd := fmt.Sprintf(
+		"set -a; [ -f /etc/environment ] && . /etc/environment; [ -f %s ] && . %s; set +a; cd %q && %s",
+		remoteEnvFile, remoteEnvFile, s.root, command,
+	)
 	cmd := s.sshCmd(ctx, remoteCmd)
-	_, _ = fmt.Fprintf(s.stderr, "[ssh-debug] exec: %s %s\n", cmd.Path, strings.Join(cmd.Args[1:], " "))
 	cmd.Stderr = s.stderr
 
 	var stdout bytes.Buffer
