@@ -212,6 +212,11 @@ func (r *CLIProgressReporter) onStepCI(event domain.StepEvent) {
 	case domain.StepStarted:
 		r.stepStart = time.Now()
 		r.streaming = false
+		if detectedProvider == ciProviderGitHub {
+			endCIGroup()
+			fmt.Fprintf(os.Stderr, "::group::%s\n", event.Message)
+			ciGroupOpen = true
+		}
 		fmt.Fprintf(os.Stderr, "  ... %s\n", event.Message)
 
 	case domain.StepStreaming:
@@ -229,6 +234,7 @@ func (r *CLIProgressReporter) onStepCI(event domain.StepEvent) {
 			msg = "Done"
 		}
 		fmt.Fprintf(os.Stderr, "  [OK] %s %s\n", msg, formatDuration(elapsed))
+		endCIGroup()
 		r.streaming = false
 
 	case domain.StepFailed:
@@ -236,6 +242,7 @@ func (r *CLIProgressReporter) onStepCI(event domain.StepEvent) {
 		if detectedProvider == ciProviderGitHub {
 			fmt.Fprintf(os.Stderr, "::error title=%s::Failed: %v\n", event.Step, event.Error)
 		}
+		endCIGroup()
 		r.streaming = false
 
 	case domain.StepSkipped:
@@ -243,6 +250,7 @@ func (r *CLIProgressReporter) onStepCI(event domain.StepEvent) {
 		if detectedProvider == ciProviderGitHub {
 			fmt.Fprintf(os.Stderr, "::warning title=%s::%s\n", event.Step, event.Message)
 		}
+		endCIGroup()
 	}
 }
 
@@ -376,17 +384,9 @@ func (s *liveSpinner) clear() {
 // --- Styled output helpers for commands ---
 
 // Header prints a styled command header.
-// On GitHub Actions, this opens a collapsible log group.
 func Header(text string) {
 	if ciMode {
-		// Close any previous group before opening a new one
-		if detectedProvider == ciProviderGitHub {
-			endCIGroup()
-			fmt.Fprintf(os.Stderr, "::group::%s\n", text)
-			ciGroupOpen = true
-		} else {
-			fmt.Fprintf(os.Stderr, "== %s\n", text)
-		}
+		fmt.Fprintf(os.Stderr, "== %s\n", text)
 		return
 	}
 	style := lipgloss.NewStyle().
@@ -396,14 +396,12 @@ func Header(text string) {
 }
 
 // Success prints a styled success message.
-// On GitHub Actions, this closes the current log group and emits a notice.
+// On GitHub Actions, this also emits a notice annotation.
 func Success(text string) {
 	if ciMode {
+		fmt.Fprintf(os.Stderr, "[OK] %s\n", text)
 		if detectedProvider == ciProviderGitHub {
-			endCIGroup()
 			fmt.Fprintf(os.Stderr, "::notice::%s\n", text)
-		} else {
-			fmt.Fprintf(os.Stderr, "[OK] %s\n", text)
 		}
 		return
 	}
