@@ -50,16 +50,7 @@ func newStatusCmd() *cobra.Command {
 			}
 			KeyValue("Infrastructure", StatusBadge(infraStatus))
 
-			// Display provisioner outputs if any
-			if len(e.ProvisionerOutputs) > 0 {
-				fmt.Fprintln(os.Stderr)
-				SectionHeader("Provisioner Outputs")
-				for svcName, outputs := range e.ProvisionerOutputs {
-					for key, val := range outputs {
-						DetailKeyValue(fmt.Sprintf("%s.%s", svcName, key), val)
-					}
-				}
-			}
+			// Provisioner outputs omitted from status — may contain credentials.
 
 			var domain string
 			if cfg.Runner != nil && cfg.Runner.Compose != nil && cfg.Runner.Compose.Proxy != nil {
