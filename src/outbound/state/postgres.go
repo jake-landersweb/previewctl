@@ -19,7 +19,7 @@ var migrations embed.FS
 
 // PostgresStateAdapter persists state to a PostgreSQL database.
 // Each environment is stored as a JSONB row, scoped by project name.
-// Deleted environments are soft-deleted (is_deleted = true) for audit history.
+// Deleted environments are hard-deleted from the database.
 // Run RunMigrations before first use to ensure the schema is up to date.
 type PostgresStateAdapter struct {
 	db      *sql.DB
@@ -164,11 +164,10 @@ func (a *PostgresStateAdapter) SetEnvironment(ctx context.Context, name string, 
 
 func (a *PostgresStateAdapter) RemoveEnvironment(ctx context.Context, name string) error {
 	_, err := a.db.ExecContext(ctx,
-		`UPDATE environments SET is_deleted = true, status = 'deleted', updated_at = now()
-		 WHERE project = $1 AND name = $2`,
+		`DELETE FROM environments WHERE project = $1 AND name = $2`,
 		a.project, name)
 	if err != nil {
-		return fmt.Errorf("soft-deleting environment '%s': %w", name, err)
+		return fmt.Errorf("deleting environment '%s': %w", name, err)
 	}
 	return nil
 }
