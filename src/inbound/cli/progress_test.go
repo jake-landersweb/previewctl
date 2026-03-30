@@ -109,41 +109,13 @@ func TestHeader_GitHubActions(t *testing.T) {
 	disableStyles()
 	cleanup := setCIMode(true, ciProviderGitHub)
 	defer cleanup()
-	ciGroupOpen = false
 
 	out := captureStderr(t, func() { Header("Creating environment") })
 
-	if !strings.Contains(out, "::group::Creating environment") {
-		t.Errorf("expected ::group:: command, got: %q", out)
+	// Header should be plain text in GitHub Actions (groups are at step level)
+	if out != "== Creating environment\n" {
+		t.Errorf("expected plain header, got: %q", out)
 	}
-	if !ciGroupOpen {
-		t.Error("expected ciGroupOpen to be true after Header")
-	}
-	// Clean up
-	ciGroupOpen = false
-}
-
-func TestHeader_GitHubActions_ClosesOpenGroup(t *testing.T) {
-	restoreStyles := saveStyles()
-	defer restoreStyles()
-	disableStyles()
-	cleanup := setCIMode(true, ciProviderGitHub)
-	defer cleanup()
-	ciGroupOpen = false
-
-	out := captureStderr(t, func() {
-		Header("First phase")
-		Header("Second phase")
-	})
-
-	if !strings.Contains(out, "::endgroup::") {
-		t.Errorf("expected ::endgroup:: when opening second group, got: %q", out)
-	}
-	// Should have both groups
-	if strings.Count(out, "::group::") != 2 {
-		t.Errorf("expected 2 ::group:: commands, got: %q", out)
-	}
-	ciGroupOpen = false
 }
 
 func TestSuccess_CI(t *testing.T) {
@@ -169,17 +141,15 @@ func TestSuccess_GitHubActions(t *testing.T) {
 	disableStyles()
 	cleanup := setCIMode(true, ciProviderGitHub)
 	defer cleanup()
-	ciGroupOpen = true
 
 	out := captureStderr(t, func() { Success("Environment ready") })
 
-	if !strings.Contains(out, "::endgroup::") {
-		t.Errorf("expected ::endgroup:: before notice, got: %q", out)
+	if !strings.Contains(out, "[OK] Environment ready") {
+		t.Errorf("expected [OK] message, got: %q", out)
 	}
 	if !strings.Contains(out, "::notice::Environment ready") {
-		t.Errorf("expected ::notice:: command, got: %q", out)
+		t.Errorf("expected ::notice:: annotation, got: %q", out)
 	}
-	ciGroupOpen = false
 }
 
 func TestKeyValue_CI(t *testing.T) {
@@ -368,12 +338,77 @@ func TestProgressReporter_CI_StepSkipped(t *testing.T) {
 	}
 }
 
+func TestProgressReporter_GitHubActions_StepGroups(t *testing.T) {
+	restoreStyles := saveStyles()
+	defer restoreStyles()
+	disableStyles()
+	cleanup := setCIMode(true, ciProviderGitHub)
+	defer cleanup()
+	ciGroupOpen = false
+
+	reporter := NewCLIProgressReporter()
+
+	out := captureStderr(t, func() {
+		reporter.OnStep(domain.StepEvent{
+			Step:    "create_worktree",
+			Status:  domain.StepStarted,
+			Message: "Creating worktree",
+		})
+		reporter.OnStep(domain.StepEvent{
+			Step:    "create_worktree",
+			Status:  domain.StepCompleted,
+			Message: "Worktree created",
+		})
+	})
+
+	if !strings.Contains(out, "::group::Creating worktree") {
+		t.Errorf("expected ::group:: on step start, got: %q", out)
+	}
+	if !strings.Contains(out, "::endgroup::") {
+		t.Errorf("expected ::endgroup:: on step complete, got: %q", out)
+	}
+}
+
+func TestProgressReporter_GitHubActions_ConsecutiveSteps(t *testing.T) {
+	restoreStyles := saveStyles()
+	defer restoreStyles()
+	disableStyles()
+	cleanup := setCIMode(true, ciProviderGitHub)
+	defer cleanup()
+	ciGroupOpen = false
+
+	reporter := NewCLIProgressReporter()
+
+	out := captureStderr(t, func() {
+		reporter.OnStep(domain.StepEvent{
+			Step: "step_a", Status: domain.StepStarted, Message: "Step A",
+		})
+		reporter.OnStep(domain.StepEvent{
+			Step: "step_a", Status: domain.StepCompleted, Message: "Step A done",
+		})
+		reporter.OnStep(domain.StepEvent{
+			Step: "step_b", Status: domain.StepStarted, Message: "Step B",
+		})
+		reporter.OnStep(domain.StepEvent{
+			Step: "step_b", Status: domain.StepCompleted, Message: "Step B done",
+		})
+	})
+
+	if strings.Count(out, "::group::") != 2 {
+		t.Errorf("expected 2 ::group:: commands, got: %q", out)
+	}
+	if strings.Count(out, "::endgroup::") != 2 {
+		t.Errorf("expected 2 ::endgroup:: commands, got: %q", out)
+	}
+}
+
 func TestProgressReporter_GitHubActions_StepFailed(t *testing.T) {
 	restoreStyles := saveStyles()
 	defer restoreStyles()
 	disableStyles()
 	cleanup := setCIMode(true, ciProviderGitHub)
 	defer cleanup()
+	ciGroupOpen = false
 
 	reporter := NewCLIProgressReporter()
 
@@ -390,8 +425,14 @@ func TestProgressReporter_GitHubActions_StepFailed(t *testing.T) {
 		})
 	})
 
+	if !strings.Contains(out, "::group::Seeding database") {
+		t.Errorf("expected ::group:: on step start, got: %q", out)
+	}
 	if !strings.Contains(out, "::error title=seed_db::Failed: connection refused") {
 		t.Errorf("expected GitHub Actions error annotation, got: %q", out)
+	}
+	if !strings.Contains(out, "::endgroup::") {
+		t.Errorf("expected ::endgroup:: after failure, got: %q", out)
 	}
 }
 
@@ -401,10 +442,16 @@ func TestProgressReporter_GitHubActions_StepSkipped(t *testing.T) {
 	disableStyles()
 	cleanup := setCIMode(true, ciProviderGitHub)
 	defer cleanup()
+	ciGroupOpen = false
 
 	reporter := NewCLIProgressReporter()
 
 	out := captureStderr(t, func() {
+		reporter.OnStep(domain.StepEvent{
+			Step:    "run_hook",
+			Status:  domain.StepStarted,
+			Message: "Running hook",
+		})
 		reporter.OnStep(domain.StepEvent{
 			Step:    "run_hook",
 			Status:  domain.StepSkipped,
@@ -414,6 +461,9 @@ func TestProgressReporter_GitHubActions_StepSkipped(t *testing.T) {
 
 	if !strings.Contains(out, "::warning title=run_hook::No hook configured") {
 		t.Errorf("expected GitHub Actions warning annotation, got: %q", out)
+	}
+	if !strings.Contains(out, "::endgroup::") {
+		t.Errorf("expected ::endgroup:: after skip, got: %q", out)
 	}
 }
 
