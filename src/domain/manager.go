@@ -1075,6 +1075,11 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 			return nil, fmt.Errorf("syncing code: %w", err)
 		}
 		m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepCompleted, Message: *syncOpts.CompleteMsg})
+
+		// Code changed — invalidate build and restart steps so they re-run.
+		for _, step := range []string{"build_services", "start_services"} {
+			entry.InvalidateStep(step, "code synced, rebuild required")
+		}
 	}
 
 	// 1-2. runner.before + generate_env

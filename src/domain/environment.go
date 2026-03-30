@@ -90,8 +90,9 @@ func BuildComposeEnv(projectName, envName string, ports PortMap) []string {
 type StepRecordStatus string
 
 const (
-	StepRecordCompleted StepRecordStatus = "completed"
-	StepRecordFailed    StepRecordStatus = "failed"
+	StepRecordCompleted   StepRecordStatus = "completed"
+	StepRecordFailed      StepRecordStatus = "failed"
+	StepRecordInvalidated StepRecordStatus = "invalidated"
 )
 
 // StepRecord is the checkpoint persisted for a single step execution.
@@ -203,6 +204,27 @@ func (e *EnvironmentEntry) StepCompleted(name string) bool {
 	}
 	r, ok := e.Steps[name]
 	return ok && r.Status == StepRecordCompleted
+}
+
+// InvalidateStep marks a completed step as invalidated so it will re-run.
+// Returns true if the step was actually invalidated (was previously completed).
+func (e *EnvironmentEntry) InvalidateStep(name, reason string) bool {
+	if !e.StepCompleted(name) {
+		return false
+	}
+	e.SetStepRecord(&StepRecord{
+		Name:       name,
+		Status:     StepRecordInvalidated,
+		FinishedAt: time.Now(),
+	})
+	e.AppendAudit(AuditEntry{
+		Timestamp: time.Now(),
+		Step:      name,
+		Action:    "invalidated",
+		Machine:   Hostname(),
+		Message:   reason,
+	})
+	return true
 }
 
 // SetStepRecord records a step completion/failure.
