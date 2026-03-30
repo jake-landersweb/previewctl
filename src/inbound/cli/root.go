@@ -27,12 +27,16 @@ var globalEnvName string
 // globalEnvFiles holds the --env-file flag value.
 var globalEnvFiles string
 
+// globalCI holds the --ci flag value.
+var globalCI bool
+
 // Execute runs the CLI.
 func Execute() {
 	rootCmd := &cobra.Command{
 		Use:   "previewctl",
 		Short: "Manage isolated preview and development environments",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			initOutputMode(globalCI)
 			return loadEnvFiles(globalEnvFiles)
 		},
 		Run: func(cmd *cobra.Command, args []string) {
@@ -48,6 +52,7 @@ func Execute() {
 	rootCmd.PersistentFlags().StringVarP(&globalMode, "mode", "m", "", "Deployment mode (local, remote). Inferred from environment state when omitted.")
 	rootCmd.PersistentFlags().StringVarP(&globalEnvName, "env", "e", "", "Environment name (required for remote mode, inferred from cwd for local)")
 	rootCmd.PersistentFlags().StringVar(&globalEnvFiles, "env-file", "", "Comma-separated list of env files to load (in addition to .env and .env.previewctl)")
+	rootCmd.PersistentFlags().BoolVar(&globalCI, "ci", false, "Disable colors, spinners, and animations for non-interactive environments")
 
 	rootCmd.AddCommand(
 		newEnvCmd(),
@@ -58,9 +63,11 @@ func Execute() {
 	)
 
 	if err := rootCmd.Execute(); err != nil {
+		endCIGroup()
 		version.CheckForUpdate()
 		os.Exit(1)
 	}
+	endCIGroup()
 }
 
 // resolveMode determines the deployment mode. Priority:

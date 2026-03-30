@@ -125,7 +125,7 @@ func (s *DomainSSHComputeAccess) Exec(ctx context.Context, command string, env [
 	cmd.Stderr = s.stderr
 
 	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
+	cmd.Stdout = io.MultiWriter(&stdout, s.stderr)
 
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("remote exec: %w", err)
