@@ -74,10 +74,14 @@ func parseComposeData(data []byte) (map[string]InfraService, error) {
 	return services, nil
 }
 
+// containerOnlyPattern matches container-only port mappings like "6379".
+var containerOnlyPattern = regexp.MustCompile(`^(\d+)$`)
+
 // parsePortMapping parses a docker compose port mapping string.
 // Supported formats:
 //   - "${REDIS_PORT:-6379}:6379" -> env var: REDIS_PORT, port: 6379
 //   - "6379:6379"               -> env var: "", port: 6379
+//   - "6379"                    -> env var: "", port: 6379 (container-only)
 func parsePortMapping(mapping string) (envVar string, port int, err error) {
 	// Try env var pattern: ${VAR:-default}:container_port
 	if m := envVarPattern.FindStringSubmatch(mapping); m != nil {
@@ -87,6 +91,12 @@ func parsePortMapping(mapping string) (envVar string, port int, err error) {
 
 	// Try static pattern: host_port:container_port
 	if m := staticPortPattern.FindStringSubmatch(mapping); m != nil {
+		p, _ := strconv.Atoi(m[1])
+		return "", p, nil
+	}
+
+	// Try container-only pattern: container_port
+	if m := containerOnlyPattern.FindStringSubmatch(mapping); m != nil {
 		p, _ := strconv.Atoi(m[1])
 		return "", p, nil
 	}

@@ -77,6 +77,27 @@ services:
 	}
 }
 
+func TestParseComposeData_ContainerOnlyPort(t *testing.T) {
+	data := []byte(`
+services:
+  mongo:
+    image: mongo:7.0
+    ports:
+      - "27017"
+`)
+	services, err := parseComposeData(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	mongo := services["mongo"]
+	if mongo.Port != 27017 {
+		t.Errorf("expected port 27017, got %d", mongo.Port)
+	}
+	if mongo.EnvVar != "" {
+		t.Errorf("expected empty env var, got '%s'", mongo.EnvVar)
+	}
+}
+
 func TestParseComposeData_NoPorts(t *testing.T) {
 	data := []byte(`
 services:
