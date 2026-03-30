@@ -58,6 +58,14 @@ type SSHConfig struct {
 	ProxyCommand string `yaml:"proxy_command"`
 	// User is the SSH username. Example: "{{store.SSH_USER}}"
 	User string `yaml:"user"`
+	// UserCommand is a shell command that resolves the SSH username dynamically.
+	// Useful when different users (CI vs human) SSH into the same VM.
+	// Example: "gcloud compute os-login describe-profile --format='value(posixAccounts[0].username)'"
+	// Takes precedence over User when set.
+	UserCommand string `yaml:"user_command"`
+	// IdentityFile is the path to the SSH private key. Supports ~ expansion.
+	// Example: "~/.ssh/google_compute_engine"
+	IdentityFile string `yaml:"identity_file"`
 	// Root is the remote working directory. Defaults to "/app".
 	Root string `yaml:"root,omitempty"`
 }

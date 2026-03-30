@@ -233,7 +233,15 @@ func (m *Manager) BuildSSHComputeAccess(entry *EnvironmentEntry) ComputeAccess {
 		proxyCmd, err := RenderTemplate(sshCfg.ProxyCommand, tmplCtx)
 		if err == nil && proxyCmd != "" {
 			user := entry.Compute.User
-			if sshCfg.User != "" {
+			if sshCfg.UserCommand != "" {
+				// Resolve user dynamically via shell command (e.g., gcloud os-login)
+				out, cmdErr := exec.Command("sh", "-c", sshCfg.UserCommand).Output()
+				if cmdErr == nil {
+					if resolved := strings.TrimSpace(string(out)); resolved != "" {
+						user = resolved
+					}
+				}
+			} else if sshCfg.User != "" {
 				if resolved, err := RenderTemplate(sshCfg.User, tmplCtx); err == nil {
 					user = resolved
 				}
@@ -249,6 +257,7 @@ func (m *Manager) BuildSSHComputeAccess(entry *EnvironmentEntry) ComputeAccess {
 				Host:         host,
 				User:         user,
 				Root:         root,
+				IdentityFile: sshCfg.IdentityFile,
 				ProxyCommand: proxyCmd,
 			})
 		}

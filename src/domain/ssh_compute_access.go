@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -22,6 +23,7 @@ type DomainSSHComputeAccess struct {
 	user         string
 	root         string // remote working directory, e.g., "/app"
 	proxyCommand string // SSH ProxyCommand (proxy mode). When set, host is ignored for routing.
+	identityFile string // path to SSH private key (optional)
 	stderr       io.Writer
 }
 
@@ -31,6 +33,7 @@ type SSHComputeAccessOpts struct {
 	User         string
 	Root         string
 	ProxyCommand string // when set, uses -o ProxyCommand=... instead of relying on SSH config
+	IdentityFile string // path to SSH private key (optional)
 }
 
 // NewDomainSSHComputeAccess creates a ComputeAccess backed by SSH to a remote host.
@@ -46,6 +49,7 @@ func NewDomainSSHComputeAccessWithOpts(opts SSHComputeAccessOpts) ComputeAccess 
 		user:         opts.User,
 		root:         opts.Root,
 		proxyCommand: opts.ProxyCommand,
+		identityFile: opts.IdentityFile,
 		stderr:       os.Stderr,
 	}
 }
@@ -148,14 +152,20 @@ func (s *DomainSSHComputeAccess) sshCmd(ctx context.Context, remoteCmd string) *
 		"-o", "LogLevel=ERROR",
 	}
 
+	if s.identityFile != "" {
+		expanded := s.identityFile
+		if strings.HasPrefix(expanded, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				expanded = filepath.Join(home, expanded[2:])
+			}
+		}
+		args = append(args, "-i", expanded)
+	}
+
 	if s.proxyCommand != "" {
 		args = append(args, "-o", fmt.Sprintf("ProxyCommand=%s", s.proxyCommand))
-		// With ProxyCommand, we still need a target. Use the host as a logical name
-		// (the actual routing is done by the proxy command).
-		args = append(args, s.target())
-	} else {
-		args = append(args, s.target())
 	}
+	args = append(args, s.target())
 
 	args = append(args, remoteCmd)
 	return exec.CommandContext(ctx, "ssh", args...)
@@ -167,6 +177,15 @@ func (s *DomainSSHComputeAccess) SSHArgs() []string {
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",
+	}
+	if s.identityFile != "" {
+		expanded := s.identityFile
+		if strings.HasPrefix(expanded, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				expanded = filepath.Join(home, expanded[2:])
+			}
+		}
+		args = append(args, "-i", expanded)
 	}
 	if s.proxyCommand != "" {
 		args = append(args, "-o", fmt.Sprintf("ProxyCommand=%s", s.proxyCommand))
