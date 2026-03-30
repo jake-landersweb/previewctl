@@ -126,7 +126,6 @@ func (s *DomainSSHComputeAccess) Exec(ctx context.Context, command string, env [
 		remoteEnvFile, remoteEnvFile, s.root, command,
 	)
 	cmd := s.sshCmd(ctx, remoteCmd)
-	_, _ = fmt.Fprintf(s.stderr, "[ssh-debug] exec: %s %s\n", cmd.Path, strings.Join(cmd.Args[1:], " "))
 	cmd.Stderr = s.stderr
 
 	var stdout bytes.Buffer

@@ -1310,9 +1310,28 @@ func (m *Manager) Status(ctx context.Context, envName string) (*EnvironmentDetai
 	if entry == nil {
 		return nil, fmt.Errorf("environment '%s' not found", envName)
 	}
-	infraRunning, err := m.compute.IsRunning(ctx, envName)
-	if err != nil {
-		return nil, fmt.Errorf("checking infra status: %w", err)
+	var infraRunning bool
+	if entry.Compute != nil && entry.Compute.Type == "ssh" {
+		ca := m.BuildSSHComputeAccess(entry)
+		// Suppress stdout/stderr for internal status checks
+		if setter, ok := ca.(interface{ SetStderr(io.Writer) }); ok {
+			setter.SetStderr(io.Discard)
+		}
+		var composeFile string
+		if m.config.Infrastructure != nil {
+			composeFile = m.config.Infrastructure.ComposeFile
+		}
+		if composeFile != "" {
+			projectName := ComposeProjectName(m.config.Name, envName)
+			cmd := fmt.Sprintf("docker compose -f %s -p %s ps --format json", composeFile, projectName)
+			out, execErr := ca.Exec(ctx, cmd, nil)
+			infraRunning = execErr == nil && len(strings.TrimSpace(out)) > 0
+		}
+	} else {
+		infraRunning, err = m.compute.IsRunning(ctx, envName)
+		if err != nil {
+			return nil, fmt.Errorf("checking infra status: %w", err)
+		}
 	}
 	return &EnvironmentDetail{Entry: entry, InfraRunning: infraRunning}, nil
 }
