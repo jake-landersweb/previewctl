@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/jake-landersweb/previewctl/src/domain"
+	"github.com/jake-landersweb/previewctl/src/version"
 )
 
 var (
@@ -40,6 +42,61 @@ var (
 	spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 )
 
+// ciMode disables spinners, animations, unicode indicators, and decorative whitespace.
+var ciMode bool
+
+// ciProvider identifies the detected CI environment for provider-specific formatting.
+type ciProvider int
+
+const (
+	ciProviderNone    ciProvider = iota
+	ciProviderGeneric            // CI=true but no specific provider detected
+	ciProviderGitHub             // GITHUB_ACTIONS=true
+)
+
+var detectedProvider ciProvider
+
+// initOutputMode detects the terminal color profile and configures output mode.
+// It respects NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb, pipe/redirect detection,
+// and explicit CI triggers (--ci flag, CI=true env var).
+// It also auto-detects CI providers (GitHub Actions, etc.) for enhanced formatting.
+func initOutputMode(ciFlag bool) {
+	profile := colorprofile.Detect(os.Stderr, os.Environ())
+
+	// CI mode: explicit flag, CI env var, or non-TTY
+	if ciFlag || os.Getenv("CI") == "true" || profile <= colorprofile.NoTTY {
+		ciMode = true
+	}
+
+	// Disable styles when no color support
+	if profile <= colorprofile.ASCII || ciFlag || os.Getenv("CI") == "true" {
+		disableStyles()
+		version.DisableColors()
+	}
+
+	// Auto-detect CI provider for enhanced formatting
+	if ciMode {
+		switch {
+		case os.Getenv("GITHUB_ACTIONS") == "true":
+			detectedProvider = ciProviderGitHub
+		default:
+			detectedProvider = ciProviderGeneric
+		}
+	}
+}
+
+func disableStyles() {
+	plain := lipgloss.NewStyle()
+	styleSuccess = plain
+	styleFail = plain
+	styleSkipped = plain
+	styleSpinner = plain
+	styleDim = plain
+	styleMessage = plain
+	styleDuration = plain
+	styleDetail = plain
+}
+
 // CLIProgressReporter renders lifecycle events with colors, spinners, and timing.
 type CLIProgressReporter struct {
 	stepStart time.Time
@@ -61,6 +118,10 @@ func (r *CLIProgressReporter) StderrWriter() io.Writer {
 }
 
 func (r *CLIProgressReporter) OnStep(event domain.StepEvent) {
+	if ciMode {
+		r.onStepCI(event)
+		return
+	}
 	switch event.Status {
 	case domain.StepStarted:
 		r.stepStart = time.Now()
@@ -146,6 +207,45 @@ func (r *CLIProgressReporter) OnStep(event domain.StepEvent) {
 	}
 }
 
+func (r *CLIProgressReporter) onStepCI(event domain.StepEvent) {
+	switch event.Status {
+	case domain.StepStarted:
+		r.stepStart = time.Now()
+		r.streaming = false
+		fmt.Fprintf(os.Stderr, "  ... %s\n", event.Message)
+
+	case domain.StepStreaming:
+		r.streaming = true
+		msg := event.Message
+		if msg == "" {
+			msg = event.Step
+		}
+		fmt.Fprintf(os.Stderr, "  -- %s\n", msg)
+
+	case domain.StepCompleted:
+		elapsed := time.Since(r.stepStart)
+		msg := event.Message
+		if msg == "" {
+			msg = "Done"
+		}
+		fmt.Fprintf(os.Stderr, "  [OK] %s %s\n", msg, formatDuration(elapsed))
+		r.streaming = false
+
+	case domain.StepFailed:
+		fmt.Fprintf(os.Stderr, "  [FAIL] Failed: %v\n", event.Error)
+		if detectedProvider == ciProviderGitHub {
+			fmt.Fprintf(os.Stderr, "::error title=%s::Failed: %v\n", event.Step, event.Error)
+		}
+		r.streaming = false
+
+	case domain.StepSkipped:
+		fmt.Fprintf(os.Stderr, "  [SKIP] %s\n", event.Message)
+		if detectedProvider == ciProviderGitHub {
+			fmt.Fprintf(os.Stderr, "::warning title=%s::%s\n", event.Step, event.Message)
+		}
+	}
+}
+
 func formatDuration(d time.Duration) string {
 	if d < time.Second {
 		return fmt.Sprintf("(%dms)", d.Milliseconds())
@@ -214,6 +314,11 @@ func newLiveSpinner(message string) *liveSpinner {
 }
 
 func (s *liveSpinner) Start() {
+	if ciMode {
+		fmt.Fprintf(os.Stderr, "  ... %s\n", s.message)
+		close(s.done)
+		return
+	}
 	go func() {
 		defer close(s.done)
 		frame := 0
@@ -238,6 +343,10 @@ func (s *liveSpinner) Start() {
 }
 
 func (s *liveSpinner) Stop() {
+	if ciMode {
+		<-s.done
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -267,7 +376,19 @@ func (s *liveSpinner) clear() {
 // --- Styled output helpers for commands ---
 
 // Header prints a styled command header.
+// On GitHub Actions, this opens a collapsible log group.
 func Header(text string) {
+	if ciMode {
+		// Close any previous group before opening a new one
+		if detectedProvider == ciProviderGitHub {
+			endCIGroup()
+			fmt.Fprintf(os.Stderr, "::group::%s\n", text)
+			ciGroupOpen = true
+		} else {
+			fmt.Fprintf(os.Stderr, "== %s\n", text)
+		}
+		return
+	}
 	style := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(colorWhite)
@@ -275,15 +396,40 @@ func Header(text string) {
 }
 
 // Success prints a styled success message.
+// On GitHub Actions, this closes the current log group and emits a notice.
 func Success(text string) {
+	if ciMode {
+		if detectedProvider == ciProviderGitHub {
+			endCIGroup()
+			fmt.Fprintf(os.Stderr, "::notice::%s\n", text)
+		} else {
+			fmt.Fprintf(os.Stderr, "[OK] %s\n", text)
+		}
+		return
+	}
 	fmt.Fprintf(os.Stderr, "\n%s %s\n\n",
 		styleSuccess.Render("✓"),
 		lipgloss.NewStyle().Bold(true).Foreground(colorGreen).Render(text),
 	)
 }
 
+// ciGroupOpen tracks whether a GitHub Actions log group is currently open.
+var ciGroupOpen bool
+
+// endCIGroup closes a GitHub Actions log group if one is open.
+func endCIGroup() {
+	if detectedProvider == ciProviderGitHub && ciGroupOpen {
+		fmt.Fprintf(os.Stderr, "::endgroup::\n")
+		ciGroupOpen = false
+	}
+}
+
 // KeyValue prints a styled key-value pair.
 func KeyValue(key string, value string) {
+	if ciMode {
+		fmt.Fprintf(os.Stderr, "  %s: %s\n", key, value)
+		return
+	}
 	fmt.Fprintf(os.Stderr, "  %s %s\n",
 		styleDim.Render(key+":"),
 		styleMessage.Render(value),
@@ -292,6 +438,10 @@ func KeyValue(key string, value string) {
 
 // DetailKeyValue prints a styled detail key-value pair with indentation.
 func DetailKeyValue(key string, value string) {
+	if ciMode {
+		fmt.Fprintf(os.Stderr, "    %s %s\n", key, value)
+		return
+	}
 	fmt.Fprintf(os.Stderr, "    %s %s\n",
 		styleDim.Render(key),
 		styleDetail.Render(value),
@@ -300,6 +450,10 @@ func DetailKeyValue(key string, value string) {
 
 // SectionHeader prints a styled section header.
 func SectionHeader(text string) {
+	if ciMode {
+		fmt.Fprintf(os.Stderr, "-- %s\n", text)
+		return
+	}
 	fmt.Fprintf(os.Stderr, "  %s\n",
 		lipgloss.NewStyle().Bold(true).Foreground(colorBlue).Render(text),
 	)
@@ -327,6 +481,9 @@ func PrintServiceURLs(envName string, ports domain.PortMap, proxyDomain string) 
 
 // StatusBadge returns a colored status string.
 func StatusBadge(status string) string {
+	if ciMode {
+		return status
+	}
 	switch status {
 	case "running":
 		return styleSuccess.Render("● running")

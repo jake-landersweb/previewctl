@@ -38,21 +38,26 @@ func newListCmd() *cobra.Command {
 				return nil
 			}
 
-			headerStyle := lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorDim)
-
-			nameStyle := lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorCyan)
-
-			modeLocal := lipgloss.NewStyle().
-				Foreground(colorBlue).
-				Render("local")
-
-			modeRemote := lipgloss.NewStyle().
-				Foreground(colorMagenta).
-				Render("remote")
+			var headerStyle, nameStyle lipgloss.Style
+			modeLocal := "local"
+			modeRemote := "remote"
+			if ciMode {
+				headerStyle = lipgloss.NewStyle()
+				nameStyle = lipgloss.NewStyle()
+			} else {
+				headerStyle = lipgloss.NewStyle().
+					Bold(true).
+					Foreground(colorDim)
+				nameStyle = lipgloss.NewStyle().
+					Bold(true).
+					Foreground(colorCyan)
+				modeLocal = lipgloss.NewStyle().
+					Foreground(colorBlue).
+					Render("local")
+				modeRemote = lipgloss.NewStyle().
+					Foreground(colorMagenta).
+					Render("remote")
+			}
 
 			fmt.Println()
 			for i, e := range entries {

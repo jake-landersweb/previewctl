@@ -22,6 +22,14 @@ var (
 	green  = lipgloss.NewStyle().Foreground(lipgloss.Color("#34D399"))
 )
 
+// DisableColors resets all styles to plain text for non-interactive environments.
+func DisableColors() {
+	plain := lipgloss.NewStyle()
+	dim = plain
+	yellow = plain
+	green = plain
+}
+
 // CheckForUpdate queries GitHub for the latest release and prints
 // an update notice to stderr if a newer version exists.
 // Fails silently on network errors or dev builds.
