@@ -105,7 +105,8 @@ func (s *DomainSSHComputeAccess) Exec(ctx context.Context, command string, env [
 		}
 	}
 
-	remoteCmd := fmt.Sprintf("set -a; [ -f /etc/environment ] && . /etc/environment; set +a; cd %q && %s%s", s.root, envPrefix.String(), command)
+	innerCmd := fmt.Sprintf("set -a; [ -f /etc/environment ] && . /etc/environment; set +a; cd %q && %s%s", s.root, envPrefix.String(), command)
+	remoteCmd := fmt.Sprintf("bash -c %q", innerCmd)
 	cmd := s.sshCmd(ctx, remoteCmd)
 	_, _ = fmt.Fprintf(s.stderr, "[ssh-debug] exec: %s %s\n", cmd.Path, strings.Join(cmd.Args[1:], " "))
 	cmd.Stderr = s.stderr
