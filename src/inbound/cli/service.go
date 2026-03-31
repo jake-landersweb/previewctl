@@ -166,10 +166,69 @@ func newServiceRestartCmd() *cobra.Command {
 	}
 }
 
+// optionalInt is a pflag.Value that supports --flag (uses default) and --flag N (uses N).
+type optionalInt struct {
+	val    int
+	defVal int
+	set    bool
+}
+
+func (o *optionalInt) String() string {
+	if !o.set {
+		return ""
+	}
+	return fmt.Sprintf("%d", o.val)
+}
+
+func (o *optionalInt) Set(s string) error {
+	n, err := fmt.Sscanf(s, "%d", &o.val)
+	if err != nil || n != 1 {
+		return fmt.Errorf("must be a positive integer, got %q", s)
+	}
+	if o.val <= 0 {
+		return fmt.Errorf("must be a positive integer, got %d", o.val)
+	}
+	o.set = true
+	return nil
+}
+
+func (o *optionalInt) Type() string { return "int" }
+
+// rewriteOptionalIntArgs rewrites os.Args so that "--flag N" becomes "--flag=N"
+// for flags that use NoOptDefVal. This allows cobra to correctly parse
+// optional-value flags that accept a space-separated integer.
+// Must be called before cobra parses args (e.g., in the parent command setup).
+func rewriteOptionalIntArgs(flags ...string) {
+	flagSet := make(map[string]bool, len(flags))
+	for _, f := range flags {
+		flagSet["--"+f] = true
+	}
+	rewritten := make([]string, 0, len(os.Args))
+	for i := 0; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		if flagSet[arg] && i+1 < len(os.Args) {
+			next := os.Args[i+1]
+			// If the next arg looks like a number, merge them
+			if len(next) > 0 && next[0] >= '0' && next[0] <= '9' {
+				rewritten = append(rewritten, arg+"="+next)
+				i++ // skip next
+				continue
+			}
+		}
+		rewritten = append(rewritten, arg)
+	}
+	os.Args = rewritten
+}
+
 func newServiceLogsCmd() *cobra.Command {
+	// Rewrite os.Args before cobra parses so "--tail 100" becomes "--tail=100".
+	// This is necessary because NoOptDefVal flags don't consume the next token.
+	rewriteOptionalIntArgs("head", "tail")
+
 	var (
 		follow     bool
-		tail       string
+		head       = &optionalInt{defVal: 50}
+		tail       = &optionalInt{defVal: 50}
 		since      string
 		until      string
 		timestamps bool
@@ -196,14 +255,18 @@ func newServiceLogsCmd() *cobra.Command {
 				return fmt.Errorf("environment does not support SSH")
 			}
 
+			if head.set && tail.set {
+				return fmt.Errorf("--head and --tail are mutually exclusive")
+			}
+
 			// Build docker compose logs command with flags
 			projectName := domain.ComposeProjectName(cfg.Name, entry.Name)
 			composeArgs := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s logs", projectName)
 			if follow {
 				composeArgs += " -f"
 			}
-			if tail != "" {
-				composeArgs += fmt.Sprintf(" --tail %s", tail)
+			if tail.set {
+				composeArgs += fmt.Sprintf(" --tail %d", tail.val)
 			}
 			if since != "" {
 				composeArgs += fmt.Sprintf(" --since %s", since)
@@ -221,7 +284,12 @@ func newServiceLogsCmd() *cobra.Command {
 				composeArgs += " " + svcArg
 			}
 
-			remoteCmd := fmt.Sprintf("cd %q && %s", ca.Root(), composeArgs)
+			var remoteCmd string
+			if head.set {
+				remoteCmd = fmt.Sprintf("cd %q && %s | head -n %d", ca.Root(), composeArgs, head.val)
+			} else {
+				remoteCmd = fmt.Sprintf("cd %q && %s", ca.Root(), composeArgs)
+			}
 
 			sshBin, err := exec.LookPath("ssh")
 			if err != nil {
@@ -235,7 +303,10 @@ func newServiceLogsCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Follow log output")
-	cmd.Flags().StringVar(&tail, "tail", "", "Number of lines to show from the end (e.g., 100, all)")
+	cmd.Flags().VarP(head, "head", "", "Number of lines to show from the beginning (default 50)")
+	cmd.Flags().VarP(tail, "tail", "", "Number of lines to show from the end (default 50)")
+	cmd.Flags().Lookup("head").NoOptDefVal = "50"
+	cmd.Flags().Lookup("tail").NoOptDefVal = "50"
 	cmd.Flags().StringVar(&since, "since", "", "Show logs since timestamp (e.g., 2024-01-01T00:00:00, 30m, 1h)")
 	cmd.Flags().StringVar(&until, "until", "", "Show logs until timestamp")
 	cmd.Flags().BoolVarP(&timestamps, "timestamps", "t", false, "Show timestamps")
