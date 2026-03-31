@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/spf13/cobra"
 )
 
 func newStatusCmd() *cobra.Command {
+	var format string
+
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show detailed environment status",
@@ -34,6 +37,44 @@ func newStatusCmd() *cobra.Command {
 
 			e := detail.Entry
 
+			var domain string
+			if cfg.Runner != nil && cfg.Runner.Compose != nil && cfg.Runner.Compose.Proxy != nil {
+				domain = cfg.Runner.Compose.Proxy.Domain
+			}
+
+			infraSet := make(map[string]bool)
+			for name := range cfg.InfraServices {
+				infraSet[name] = true
+			}
+
+			// Markdown format: outputs a markdown table to stdout for embedding in PRs.
+			if format == "markdown" {
+				fmt.Println("| Service | URL |")
+				fmt.Println("|---|---|")
+
+				portNames := make([]string, 0, len(e.Ports))
+				for name := range e.Ports {
+					if infraSet[name] {
+						continue
+					}
+					portNames = append(portNames, name)
+				}
+				sort.Strings(portNames)
+
+				for _, name := range portNames {
+					var url string
+					if domain != "" {
+						host := fmt.Sprintf("%s--%s.%s", e.Name, name, domain)
+						url = fmt.Sprintf("[%s](https://%s)", host, host)
+					} else {
+						url = fmt.Sprintf("http://localhost:%d", e.Ports[name])
+					}
+					fmt.Printf("| %s | %s |\n", name, url)
+				}
+				return nil
+			}
+
+			// Default pretty format
 			Header(fmt.Sprintf("Environment %s", styleDetail.Render(e.Name)))
 
 			KeyValue("Branch", e.Branch)
@@ -50,13 +91,6 @@ func newStatusCmd() *cobra.Command {
 			}
 			KeyValue("Infrastructure", StatusBadge(infraStatus))
 
-			// Provisioner outputs omitted from status — may contain credentials.
-
-			var domain string
-			if cfg.Runner != nil && cfg.Runner.Compose != nil && cfg.Runner.Compose.Proxy != nil {
-				domain = cfg.Runner.Compose.Proxy.Domain
-			}
-
 			var infraNames []string
 			for name := range cfg.InfraServices {
 				infraNames = append(infraNames, name)
@@ -69,6 +103,8 @@ func newStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&format, "format", "", "Output format: markdown")
 
 	return cmd
 }
