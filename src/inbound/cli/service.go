@@ -181,7 +181,7 @@ func newServiceLogsCmd() *cobra.Command {
 		Short: "Stream service logs",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ca, _, err := resolveRemoteEnv(cmd)
+			ca, cfg, entry, err := resolveRemoteEnvWithEntry(cmd)
 			if err != nil {
 				return err
 			}
@@ -197,7 +197,8 @@ func newServiceLogsCmd() *cobra.Command {
 			}
 
 			// Build docker compose logs command with flags
-			composeArgs := "docker compose -f .previewctl.compose.yaml logs"
+			projectName := domain.ComposeProjectName(cfg.Name, entry.Name)
+			composeArgs := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s logs", projectName)
 			if follow {
 				composeArgs += " -f"
 			}
