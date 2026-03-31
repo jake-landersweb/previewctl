@@ -120,7 +120,7 @@ func (r *stepRegistry) runnerBefore(ctx context.Context) StepOpts {
 		Fn: func() error {
 			r.m.progress.OnStep(StepEvent{Step: "runner_before", Status: StepStreaming, Message: fmt.Sprintf("Running runner.before → %s", cfg.Runner.Before)})
 			env := r.m.buildHookEnv(r.envName, r.ca.Root(), r.manifest.Ports, r.entry.Env)
-			_, err := r.ca.Exec(ctx, cfg.Runner.Before, env)
+			_, err := r.ca.VerboseExec(ctx, cfg.Runner.Before, env)
 			return err
 		},
 	}
@@ -178,7 +178,7 @@ func (r *stepRegistry) startInfra(ctx context.Context) StepOpts {
 			}
 			env := BuildComposeEnv(cfg.Name, r.envName, manifest.Ports)
 			cmd := fmt.Sprintf("docker compose -f %s up -d", composeFile)
-			_, err := r.ca.Exec(ctx, cmd, env)
+			_, err := r.ca.VerboseExec(ctx, cmd, env)
 			return err
 		},
 		Verify: func(ctx context.Context) error {
@@ -300,7 +300,7 @@ func (r *stepRegistry) buildServices(ctx context.Context) StepOpts {
 			for i, cmd := range cmds {
 				_, _ = fmt.Fprintf(stderr, "    [%d/%d] %s\n", i+1, len(cmds), cmd)
 			}
-			_, err := r.ca.Exec(ctx, strings.Join(cmds, " && "), nil)
+			_, err := r.ca.VerboseExec(ctx, strings.Join(cmds, " && "), nil)
 			return err
 		},
 	}
@@ -329,7 +329,7 @@ func (r *stepRegistry) startServices(ctx context.Context) StepOpts {
 			}
 			composeServices = append(composeServices, services...)
 			cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml up -d %s", strings.Join(composeServices, " "))
-			_, err := r.ca.Exec(ctx, cmd, nil)
+			_, err := r.ca.VerboseExec(ctx, cmd, nil)
 			return err
 		},
 		Verify: func(ctx context.Context) error {
@@ -377,7 +377,7 @@ func (r *stepRegistry) runnerDeploy(ctx context.Context) StepOpts {
 		Fn: func() error {
 			r.m.progress.OnStep(StepEvent{Step: "runner_deploy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.deploy → %s", cfg.Runner.Deploy)})
 			env := r.m.buildHookEnv(r.envName, r.ca.Root(), r.manifest.Ports, r.entry.Env)
-			_, err := r.ca.Exec(ctx, cfg.Runner.Deploy, env)
+			_, err := r.ca.VerboseExec(ctx, cfg.Runner.Deploy, env)
 			return err
 		},
 	}
@@ -401,7 +401,7 @@ func (r *stepRegistry) runnerAfter(ctx context.Context) StepOpts {
 		Fn: func() error {
 			r.m.progress.OnStep(StepEvent{Step: "runner_after", Status: StepStreaming, Message: fmt.Sprintf("Running runner.after → %s", cfg.Runner.After)})
 			env := r.m.buildHookEnv(r.envName, r.ca.Root(), r.manifest.Ports, r.entry.Env)
-			_, err := r.ca.Exec(ctx, cfg.Runner.After, env)
+			_, err := r.ca.VerboseExec(ctx, cfg.Runner.After, env)
 			return err
 		},
 	}

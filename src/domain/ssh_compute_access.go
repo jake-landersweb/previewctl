@@ -98,6 +98,14 @@ func (s *DomainSSHComputeAccess) ReadFile(ctx context.Context, relPath string) (
 }
 
 func (s *DomainSSHComputeAccess) Exec(ctx context.Context, command string, env []string) (string, error) {
+	return s.execInternal(ctx, command, env, false)
+}
+
+func (s *DomainSSHComputeAccess) VerboseExec(ctx context.Context, command string, env []string) (string, error) {
+	return s.execInternal(ctx, command, env, true)
+}
+
+func (s *DomainSSHComputeAccess) execInternal(ctx context.Context, command string, env []string, teeStdout bool) (string, error) {
 	// Write environment variables to a temp file on the remote host, then source
 	// it before running the command. This avoids SSH command-line length limits
 	// that can silently truncate long inline export chains.
@@ -129,7 +137,11 @@ func (s *DomainSSHComputeAccess) Exec(ctx context.Context, command string, env [
 	cmd.Stderr = s.stderr
 
 	var stdout bytes.Buffer
-	cmd.Stdout = io.MultiWriter(&stdout, s.stderr)
+	if teeStdout {
+		cmd.Stdout = io.MultiWriter(&stdout, s.stderr)
+	} else {
+		cmd.Stdout = &stdout
+	}
 
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("remote exec: %w", err)
