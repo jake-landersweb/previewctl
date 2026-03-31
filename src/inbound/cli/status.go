@@ -57,8 +57,13 @@ func newStatusCmd() *cobra.Command {
 				domain = cfg.Runner.Compose.Proxy.Domain
 			}
 
+			var infraNames []string
+			for name := range cfg.InfraServices {
+				infraNames = append(infraNames, name)
+			}
+
 			fmt.Fprintln(os.Stderr)
-			PrintServiceURLs(e.Name, e.Ports, domain)
+			PrintServiceURLs(e.Name, e.Ports, domain, infraNames...)
 			fmt.Fprintln(os.Stderr)
 
 			return nil

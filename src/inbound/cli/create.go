@@ -76,7 +76,11 @@ The worktree will not be removed on delete.`,
 			if cfg.Runner != nil && cfg.Runner.Compose != nil && cfg.Runner.Compose.Proxy != nil {
 				domain = cfg.Runner.Compose.Proxy.Domain
 			}
-			PrintServiceURLs(envName, entry.Ports, domain)
+			var infraNames []string
+			for name := range cfg.InfraServices {
+				infraNames = append(infraNames, name)
+			}
+			PrintServiceURLs(envName, entry.Ports, domain, infraNames...)
 			fmt.Println()
 
 			return nil

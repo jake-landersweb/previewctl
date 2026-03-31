@@ -45,6 +45,12 @@ var (
 // ciMode disables spinners, animations, unicode indicators, and decorative whitespace.
 var ciMode bool
 
+// verboseMode shows detailed output from internal operations (e.g., SSH commands, docker ps).
+var verboseMode bool
+
+// IsVerbose returns whether verbose output is enabled.
+func IsVerbose() bool { return verboseMode }
+
 // ciProvider identifies the detected CI environment for provider-specific formatting.
 type ciProvider int
 
@@ -60,7 +66,8 @@ var detectedProvider ciProvider
 // It respects NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb, pipe/redirect detection,
 // and explicit CI triggers (--ci flag, CI=true env var).
 // It also auto-detects CI providers (GitHub Actions, etc.) for enhanced formatting.
-func initOutputMode(ciFlag bool) {
+func initOutputMode(ciFlag bool, verbose bool) {
+	verboseMode = verbose
 	profile := colorprofile.Detect(os.Stderr, os.Environ())
 
 	// CI mode: explicit flag, CI env var, or non-TTY
@@ -458,10 +465,18 @@ func SectionHeader(text string) {
 }
 
 // PrintServiceURLs prints a "Services" section with compiled URLs or localhost fallbacks.
-func PrintServiceURLs(envName string, ports domain.PortMap, proxyDomain string) {
+// Optional excludeServices filters out infrastructure services (e.g., "redis") from the list.
+func PrintServiceURLs(envName string, ports domain.PortMap, proxyDomain string, excludeServices ...string) {
+	excludeSet := make(map[string]bool, len(excludeServices))
+	for _, s := range excludeServices {
+		excludeSet[s] = true
+	}
 	SectionHeader("Services")
 	portNames := make([]string, 0, len(ports))
 	for name := range ports {
+		if excludeSet[name] {
+			continue
+		}
 		portNames = append(portNames, name)
 	}
 	sort.Strings(portNames)

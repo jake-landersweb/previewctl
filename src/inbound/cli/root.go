@@ -30,13 +30,16 @@ var globalEnvFiles string
 // globalCI holds the --ci flag value.
 var globalCI bool
 
+// globalVerbose holds the --verbose flag value.
+var globalVerbose bool
+
 // Execute runs the CLI.
 func Execute() {
 	rootCmd := &cobra.Command{
 		Use:   "previewctl",
 		Short: "Manage isolated preview and development environments",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			initOutputMode(globalCI)
+			initOutputMode(globalCI, globalVerbose)
 			return loadEnvFiles(globalEnvFiles)
 		},
 		Run: func(cmd *cobra.Command, args []string) {
@@ -48,11 +51,12 @@ func Execute() {
 		},
 	}
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
-	rootCmd.Flags().BoolP("version", "v", false, "Print the current version and check for updates")
+	rootCmd.Flags().Bool("version", false, "Print the current version and check for updates")
 	rootCmd.PersistentFlags().StringVarP(&globalMode, "mode", "m", "", "Deployment mode (local, remote). Inferred from environment state when omitted.")
 	rootCmd.PersistentFlags().StringVarP(&globalEnvName, "env", "e", "", "Environment name (required for remote mode, inferred from cwd for local)")
 	rootCmd.PersistentFlags().StringVar(&globalEnvFiles, "env-file", "", "Comma-separated list of env files to load (in addition to .env and .env.previewctl)")
 	rootCmd.PersistentFlags().BoolVar(&globalCI, "ci", false, "Disable colors, spinners, and animations for non-interactive environments")
+	rootCmd.PersistentFlags().BoolVarP(&globalVerbose, "verbose", "v", false, "Show detailed output from internal operations")
 
 	rootCmd.AddCommand(
 		newEnvCmd(),

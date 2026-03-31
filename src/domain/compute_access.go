@@ -15,8 +15,12 @@ type ComputeAccess interface {
 	ReadFile(ctx context.Context, relPath string) ([]byte, error)
 
 	// Exec runs a command in the compute root directory.
-	// Stderr streams to os.Stderr. Stdout is returned.
+	// Stderr streams to the configured writer. Stdout is captured and returned silently.
 	Exec(ctx context.Context, command string, env []string) (stdout string, err error)
+
+	// VerboseExec runs a command and tees stdout to stderr for real-time visibility.
+	// Use for user-defined hooks and build commands where output should always be visible.
+	VerboseExec(ctx context.Context, command string, env []string) (stdout string, err error)
 
 	// Root returns the compute root path (local path or remote working dir).
 	Root() string

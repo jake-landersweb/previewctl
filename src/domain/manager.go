@@ -1198,7 +1198,7 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 			func() error {
 				m.progress.OnStep(StepEvent{Step: "runner_destroy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.destroy → %s", m.config.Runner.Destroy)})
 				env := m.buildHookEnv(envName, ca.Root(), entry.Ports, entry.Env)
-				_, err := ca.Exec(ctx, m.config.Runner.Destroy, env)
+				_, err := ca.VerboseExec(ctx, m.config.Runner.Destroy, env)
 				return err
 			}); err != nil {
 			return fmt.Errorf("runner destroy hook: %w", err)
@@ -1313,10 +1313,6 @@ func (m *Manager) Status(ctx context.Context, envName string) (*EnvironmentDetai
 	var infraRunning bool
 	if entry.Compute != nil && entry.Compute.Type == "ssh" {
 		ca := m.BuildSSHComputeAccess(entry)
-		// Suppress stdout/stderr for internal status checks
-		if setter, ok := ca.(interface{ SetStderr(io.Writer) }); ok {
-			setter.SetStderr(io.Discard)
-		}
 		var composeFile string
 		if m.config.Infrastructure != nil {
 			composeFile = m.config.Infrastructure.ComposeFile
@@ -1511,12 +1507,24 @@ func (l *DomainLocalComputeAccess) ReadFile(_ context.Context, relPath string) (
 }
 
 func (l *DomainLocalComputeAccess) Exec(ctx context.Context, command string, env []string) (string, error) {
+	return l.execInternal(ctx, command, env, false)
+}
+
+func (l *DomainLocalComputeAccess) VerboseExec(ctx context.Context, command string, env []string) (string, error) {
+	return l.execInternal(ctx, command, env, true)
+}
+
+func (l *DomainLocalComputeAccess) execInternal(ctx context.Context, command string, env []string, teeStdout bool) (string, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = l.root
 	cmd.Env = env
 	cmd.Stderr = l.stderr
 	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
+	if teeStdout {
+		cmd.Stdout = io.MultiWriter(&stdout, l.stderr)
+	} else {
+		cmd.Stdout = &stdout
+	}
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("exec in %s: %w", l.root, err)
 	}
