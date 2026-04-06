@@ -32,6 +32,13 @@ func NewComputeAdapter(config *domain.ProjectConfig, composeFile string) *Comput
 func (a *ComputeAdapter) Create(ctx context.Context, envName string, branch string, baseBranch string) (*domain.ComputeResources, error) {
 	worktreePath := filepath.Join(a.worktreeBase, a.config.Name, envName)
 
+	// If the worktree already exists, reuse it
+	if _, err := os.Stat(worktreePath); err == nil {
+		return &domain.ComputeResources{
+			WorktreePath: worktreePath,
+		}, nil
+	}
+
 	// Create worktree
 	var cmd *exec.Cmd
 	if baseBranch != "" {
