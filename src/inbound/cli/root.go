@@ -59,7 +59,30 @@ func Execute() {
 	rootCmd.PersistentFlags().BoolVarP(&globalVerbose, "verbose", "v", false, "Show detailed output from internal operations")
 
 	rootCmd.AddCommand(
-		newEnvCmd(),
+		// Environment lifecycle
+		newCreateCmd(),
+		newDeleteCmd(),
+		newListCmd(),
+		newStatusCmd(),
+		newRefreshCmd(),
+		newStepCmd(),
+		newStepsCmd(),
+
+		// Remote-only
+		newSSHCmd(),
+		newServiceCmd(),
+
+		// Core services and infrastructure
+		newCoreCmd(),
+		newInfraCmd(),
+
+		// Store
+		newStoreCmd(),
+
+		// Advanced phase execution
+		newRunGroupCmd(),
+
+		// Utilities
 		newMigrateCmd(),
 		newVetCmd(),
 		newCleanCmd(),

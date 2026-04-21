@@ -43,16 +43,16 @@ services:
 
 When an environment is first created, the set of enabled services is seeded from `runner.compose.autostart`. This list is stored in the environment state as `EnabledServices` and is what the `build_services` and `start_services` steps operate on -- not just the autostart list.
 
-After creation, the enabled set is modified by `env service start` and `env service stop`. This means you can enable services that were not in autostart, and disable services that were.
+After creation, the enabled set is modified by `service start` and `service stop`. This means you can enable services that were not in autostart, and disable services that were.
 
-## Commands
+## Commands (Remote Only)
 
-All service commands require the `-e` flag to specify an environment.
+App service management commands are remote-only. In local mode, you run services directly in your terminal.
 
 ### Start a Service
 
 ```bash
-previewctl -e my-env env service start api
+previewctl -e my-env service start api
 ```
 
 Builds the service (if a `build` command is configured) and runs `docker compose up` for it. Idempotent: if the service is already enabled and running, this is a no-op.
@@ -60,7 +60,7 @@ Builds the service (if a `build` command is configured) and runs `docker compose
 ### Stop a Service
 
 ```bash
-previewctl -e my-env env service stop api
+previewctl -e my-env service stop api
 ```
 
 Runs `docker compose stop` for the service and removes it from `EnabledServices`. Idempotent: if the service is already disabled, this is a no-op.
@@ -68,7 +68,7 @@ Runs `docker compose stop` for the service and removes it from `EnabledServices`
 ### Restart a Service
 
 ```bash
-previewctl -e my-env env service restart api
+previewctl -e my-env service restart api
 ```
 
 Rebuilds the service (if a `build` command is configured) and runs `docker compose restart`.
@@ -76,7 +76,7 @@ Rebuilds the service (if a `build` command is configured) and runs `docker compo
 ### View Logs
 
 ```bash
-previewctl -e my-env env service logs api
+previewctl -e my-env service logs api
 ```
 
 Streams Docker Compose logs for the named service. If no service name is given, logs from all services are shown.
@@ -93,10 +93,23 @@ Streams Docker Compose logs for the named service. If no service name is given, 
 ### List Services
 
 ```bash
-previewctl -e my-env env service list
+previewctl -e my-env service list
 ```
 
 Displays all configured services with their current status (running, stopped, or disabled), Docker container status, and proxy URLs.
+
+## Infrastructure Management (Both Modes)
+
+Infrastructure containers (from `infrastructure.compose_file`) can be managed in both local and remote modes:
+
+```bash
+previewctl -e my-env infra start           # Start all infra containers
+previewctl -e my-env infra stop            # Stop all infra containers
+previewctl -e my-env infra restart redis   # Restart specific container
+previewctl -e my-env infra logs -f         # Follow infra logs
+```
+
+See [CLI Reference](cli-reference.md) for full flag details.
 
 ## Proxy Rules
 

@@ -102,21 +102,20 @@ https://pr-42--api.previews.example.com      # API service (direct)
 https://pr-42--web.previews.example.com/api  # API via proxy rule on web subdomain
 ```
 
-## Reconciliation
+## Refreshing Remote Environments
 
-The `env reconcile` command verifies and repairs environment state:
+Use `refresh` to resync a remote environment after code or config changes:
 
 ```bash
-# Check health without making changes
-previewctl -e pr-42 env reconcile --dry-run
+# Re-run all steps (pulls code, regenerates config, rebuilds, restarts)
+previewctl -e pr-42 refresh
 
-# Verify and fix broken steps
-previewctl -e pr-42 env reconcile
+# Just regenerate env files
+previewctl -e pr-42 refresh --only generate_env
+
+# Rebuild from a specific step onward
+previewctl -e pr-42 refresh --from build_services
 ```
-
-Reconciliation walks all completed runner steps, runs each step's verify function to check that its side effects still exist, and re-executes any step that fails verification.
-
-The following steps are skipped during reconciliation because they are owned by hooks or external processes: `runner_before`, `runner_deploy`, `runner_after`, `sync_code`, `build_services`.
 
 ## Dry Run and Print
 
@@ -124,13 +123,13 @@ Preview what previewctl will do before it does it:
 
 ```bash
 # Show diff of current vs generated file for a step
-previewctl -e pr-42 env run step generate_nginx --dry-run
+previewctl -e pr-42 step generate_nginx --dry-run
 
 # Dump full generated content to stdout
-previewctl -e pr-42 env run step generate_nginx --print
+previewctl -e pr-42 step generate_nginx --print
 
 # Show full execution plan (steps, hooks, services, URLs)
-previewctl -e pr-42 env create --dry-run
+previewctl -e pr-42 create --dry-run
 ```
 
 ## CI Workflow
@@ -139,8 +138,25 @@ Remote environments integrate naturally into CI pipelines. A typical pattern:
 
 ```bash
 # Create environment for a pull request
-previewctl -m remote -e pr-${PR_NUMBER} env create --branch ${BRANCH_NAME}
+previewctl -m remote -e pr-${PR_NUMBER} create --branch ${BRANCH_NAME}
+
+# Get status for PR comment
+previewctl -e pr-${PR_NUMBER} status --format markdown > /tmp/env-status.md
 
 # Tear down when the PR is closed
-previewctl -m remote -e pr-${PR_NUMBER} env delete
+previewctl -e pr-${PR_NUMBER} delete
+```
+
+### Useful commands to include in PR descriptions
+
+```bash
+previewctl -e ${ENV} ssh                      # SSH into environment
+previewctl -e ${ENV} service start <service>  # Start a service
+previewctl -e ${ENV} service stop <service>   # Stop a service
+previewctl -e ${ENV} service restart <service> # Restart a service
+previewctl -e ${ENV} service logs <service>   # View service logs
+previewctl -e ${ENV} core postgres reset      # Reset database
+previewctl -e ${ENV} status                   # View status
+previewctl -e ${ENV} service list             # List services
+previewctl -e ${ENV} steps                    # View execution history
 ```

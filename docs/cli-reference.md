@@ -9,10 +9,259 @@ Complete command reference for the previewctl CLI.
 | `-m, --mode string`  | Deployment mode (`local`, `remote`). Inferred from state when omitted. |
 | `-e, --env string`   | Environment name. Required for remote mode; inferred from cwd for local. |
 | `--env-file string`  | Comma-separated list of env files to load.                          |
+| `--ci`               | Disable colors, spinners, and animations for non-interactive environments. |
+| `-v, --verbose`      | Show detailed output from internal operations.                      |
 
 ---
 
-## Top-Level Commands
+## Environment Lifecycle
+
+### `create`
+
+Create a new environment.
+
+```bash
+previewctl -m local -e my-env create -b feat/auth
+previewctl -m remote -e pr-42 create -b feat/auth --base main
+previewctl -e my-env create --dry-run
+```
+
+| Flag             | Description                                              |
+|------------------|----------------------------------------------------------|
+| `-m, --mode`     | Required on create (no state to infer from).             |
+| `-b, --branch`   | Git branch to check out. Defaults to environment name.   |
+| `--base`         | Base branch for new branch creation.                     |
+| `--no-cache`     | Ignore step cache and re-run all steps.                  |
+| `-w, --worktree` | Attach to an existing worktree instead of creating one.  |
+| `--dry-run`      | Show execution plan without creating anything.           |
+
+### `delete`
+
+Delete an environment and clean up its resources.
+
+```bash
+previewctl -e my-env delete
+```
+
+### `list`
+
+List all environments across state backends.
+
+```bash
+previewctl list
+previewctl list --json
+```
+
+| Flag     | Description                    |
+|----------|--------------------------------|
+| `--json` | Output as JSON.                |
+
+### `status`
+
+Show the current status of an environment.
+
+```bash
+previewctl -e my-env status
+previewctl -e my-env status --format markdown
+```
+
+| Flag       | Description                                |
+|------------|--------------------------------------------|
+| `--format` | Output format (`pretty`, `markdown`).      |
+
+### `refresh`
+
+Re-run runner steps after config or code changes. Works in both local and remote modes.
+
+```bash
+previewctl refresh                           # re-run all steps
+previewctl refresh --only generate_env       # just regenerate env files
+previewctl refresh --from build_services     # rebuild and restart onward
+```
+
+By default, all runner steps are re-run without caching. In local mode, `sync_code` is automatically skipped.
+
+| Flag             | Description                                    |
+|------------------|------------------------------------------------|
+| `--only <steps>` | Run only these steps (comma-separated).        |
+| `--from <step>`  | Re-run from this step onward.                  |
+
+### `step`
+
+Run a single runner-phase step in isolation. Works in both local and remote modes.
+
+```bash
+previewctl -e my-env step generate_env
+previewctl -e my-env step generate_nginx --dry-run
+previewctl -e my-env step generate_nginx --print
+```
+
+| Flag        | Description                                          |
+|-------------|------------------------------------------------------|
+| `--dry-run` | Show diff of current vs generated output.            |
+| `--print`   | Dump full generated content to stdout.               |
+
+Available steps: `sync_code`, `generate_manifest`, `runner_before`, `generate_env`, `start_infra`, `generate_compose`, `generate_nginx`, `build_services`, `start_services`, `runner_deploy`, `runner_after`.
+
+### `steps`
+
+Show step completion status for an environment.
+
+```bash
+previewctl -e my-env steps
+previewctl -e my-env steps --audit
+```
+
+| Flag      | Description                              |
+|-----------|------------------------------------------|
+| `--audit` | Show full audit log history for all steps. |
+
+---
+
+## Remote-Only Commands
+
+### `ssh`
+
+Open an SSH session to a remote environment.
+
+```bash
+previewctl -e pr-42 ssh
+```
+
+### `service start|stop|restart`
+
+Manage app services in a remote environment.
+
+```bash
+previewctl -e pr-42 service start api
+previewctl -e pr-42 service stop api
+previewctl -e pr-42 service restart api
+```
+
+### `service logs`
+
+Stream Docker Compose logs for app services.
+
+```bash
+previewctl -e pr-42 service logs api
+previewctl -e pr-42 service logs -f --tail 100
+```
+
+| Flag              | Description                                  |
+|-------------------|----------------------------------------------|
+| `-f`              | Follow log output.                           |
+| `--tail <n>`      | Number of lines to show from the end.        |
+| `--since <dur>`   | Show logs since a duration (e.g., `5m`).     |
+| `--until <ts>`    | Show logs until a timestamp.                 |
+| `-t`              | Show timestamps.                             |
+| `--no-color`      | Disable colored output.                      |
+
+### `service list`
+
+Show all services with status, Docker state, and proxy URLs.
+
+```bash
+previewctl -e pr-42 service list
+```
+
+---
+
+## Core Services
+
+Manage core services (databases, caches, etc.) defined in `provisioner.services`. Works in both modes.
+
+```bash
+previewctl core postgres init
+previewctl -e my-env core postgres seed
+previewctl -e my-env core postgres reset
+previewctl -e my-env core postgres destroy
+```
+
+| Subcommand | Description                                           |
+|------------|-------------------------------------------------------|
+| `init`     | Run one-time initialization.                          |
+| `seed`     | Seed the service for an environment.                  |
+| `reset`    | Reset the service to a clean state.                   |
+| `destroy`  | Tear down the service for an environment.             |
+
+---
+
+## Infrastructure
+
+Manage infrastructure containers (from `infrastructure.compose_file`). Works in both modes.
+
+```bash
+previewctl -e my-env infra start
+previewctl -e my-env infra stop
+previewctl -e my-env infra restart redis
+previewctl -e my-env infra logs -f
+previewctl -e my-env infra logs redis --tail 50
+```
+
+| Subcommand  | Description                                         |
+|-------------|-----------------------------------------------------|
+| `start`     | Start infrastructure containers.                    |
+| `stop`      | Stop infrastructure containers.                     |
+| `restart`   | Restart infrastructure containers.                  |
+| `logs`      | View infrastructure container logs.                 |
+
+Log flags are the same as `service logs` (`-f`, `--tail`, `--since`, `--until`, `-t`, `--no-color`).
+
+---
+
+## Store
+
+Manage the persistent key-value store for an environment.
+
+```bash
+previewctl -e my-env store set KEY=VALUE OTHER=VALUE2
+previewctl -e my-env store get KEY
+previewctl -e my-env store list
+```
+
+Values can also be auto-captured from hook scripts by outputting `GLOBAL_KEY=VALUE` to stdout. See [Hooks](hooks.md) for details.
+
+---
+
+## Advanced: Split Phase Execution
+
+For CI/remote workflows where provisioning and running happen on different machines.
+
+### `run provision`
+
+Run the provisioner phase only.
+
+```bash
+previewctl -e pr-42 run provision -b feat/auth
+previewctl -e pr-42 run provision --from allocate_ports --no-cache
+```
+
+| Flag             | Description                                    |
+|------------------|------------------------------------------------|
+| `-b, --branch`   | Git branch.                                    |
+| `--base`         | Base branch.                                   |
+| `--from <step>`  | Start from a specific step.                    |
+| `--no-cache`     | Ignore step cache.                             |
+
+### `run runner`
+
+Run the runner phase from an existing manifest.
+
+```bash
+previewctl run runner
+previewctl run runner --manifest path/to/.previewctl.json
+previewctl run runner --from start_services
+```
+
+| Flag               | Description                                 |
+|--------------------|---------------------------------------------|
+| `--manifest <path>` | Path to .previewctl.json (default: cwd).   |
+| `--from <step>`    | Start from a specific step.                 |
+| `--no-cache`       | Ignore step cache.                          |
+
+---
+
+## Utilities
 
 ### `vet`
 
@@ -31,10 +280,6 @@ previewctl clean --dry-run   # Preview what would be removed
 previewctl clean             # Remove orphaned resources
 ```
 
-| Flag        | Description                        |
-|-------------|------------------------------------|
-| `--dry-run` | Show what would be removed without acting. |
-
 ### `migrate`
 
 Run Postgres state database migrations. Requires `PREVIEWCTL_STATE_DSN`.
@@ -50,243 +295,3 @@ Print the current version and check for updates.
 ```bash
 previewctl version
 ```
-
----
-
-## Environment Commands
-
-All `env` commands operate on a specific environment. Use `-e` to specify the environment name.
-
-### `env create`
-
-Create a new preview environment.
-
-```bash
-previewctl -e my-env env create -b feat/auth
-previewctl -e my-env env create -b feat/auth --base main
-previewctl -e my-env env create --dry-run
-```
-
-| Flag             | Description                                              |
-|------------------|----------------------------------------------------------|
-| `-b, --branch`   | Git branch to check out.                                 |
-| `--base`         | Base branch for the worktree.                            |
-| `--no-cache`     | Ignore step cache and re-run all steps.                  |
-| `-w, --worktree` | Path to an existing worktree to use.                     |
-| `--dry-run`      | Show execution plan without creating anything.           |
-
-### `env delete`
-
-Delete an environment and clean up its resources.
-
-```bash
-previewctl -e my-env env delete
-```
-
-### `env list`
-
-List all environments across state backends.
-
-```bash
-previewctl env list
-previewctl env list --json
-```
-
-| Flag     | Description                    |
-|----------|--------------------------------|
-| `--json` | Output as JSON.                |
-
-### `env status`
-
-Show the current status of an environment.
-
-```bash
-previewctl -e my-env env status
-```
-
-### `env ssh`
-
-Open an SSH session to the remote environment.
-
-```bash
-previewctl -e my-env env ssh
-```
-
-### `env steps`
-
-Show step completion status for an environment.
-
-```bash
-previewctl -e my-env env steps
-previewctl -e my-env env steps --audit
-```
-
-| Flag      | Description                              |
-|-----------|------------------------------------------|
-| `--audit` | Show full audit log history for all steps. |
-
-### `env reconcile`
-
-Verify and repair environment state by re-running broken steps.
-
-```bash
-previewctl -e my-env env reconcile
-previewctl -e my-env env reconcile --dry-run
-```
-
-| Flag        | Description                             |
-|-------------|-----------------------------------------|
-| `--dry-run` | Check health without making changes.    |
-
----
-
-## Store Commands
-
-Manage the persistent key-value store for an environment.
-
-### `env store set`
-
-```bash
-previewctl -e my-env env store set KEY=VALUE OTHER=VALUE2
-```
-
-### `env store get`
-
-```bash
-previewctl -e my-env env store get KEY
-```
-
-### `env store list`
-
-```bash
-previewctl -e my-env env store list
-```
-
----
-
-## Service Commands
-
-Manage individual services within an environment. All require `-e`.
-
-### `env service start`
-
-Build (if configured) and start a service.
-
-```bash
-previewctl -e my-env env service start api
-```
-
-### `env service stop`
-
-Stop a running service.
-
-```bash
-previewctl -e my-env env service stop api
-```
-
-### `env service restart`
-
-Rebuild and restart a service.
-
-```bash
-previewctl -e my-env env service restart api
-```
-
-### `env service logs`
-
-Stream Docker Compose logs for a service (or all services if name is omitted).
-
-```bash
-previewctl -e my-env env service logs api
-previewctl -e my-env env service logs -f --tail 100
-```
-
-| Flag              | Description                                  |
-|-------------------|----------------------------------------------|
-| `-f`              | Follow log output (default: off).            |
-| `--tail <n>`      | Number of lines to show from the end.        |
-| `--since <dur>`   | Show logs since a duration (e.g., `5m`).     |
-| `--until <ts>`    | Show logs until a timestamp.                 |
-| `-t`              | Show timestamps.                             |
-| `--no-color`      | Disable colored output.                      |
-
-### `env service list`
-
-Show all services with status, Docker state, and proxy URLs.
-
-```bash
-previewctl -e my-env env service list
-```
-
----
-
-## Runner Commands
-
-Low-level commands for running provisioning and runner steps directly.
-
-### `env run provision`
-
-Run the provisioning pipeline.
-
-```bash
-previewctl -e my-env env run provision -b feat/auth
-previewctl -e my-env env run provision --from allocate_ports --no-cache
-```
-
-| Flag             | Description                                    |
-|------------------|------------------------------------------------|
-| `-b, --branch`   | Git branch.                                    |
-| `--base`         | Base branch.                                   |
-| `--from <step>`  | Start from a specific step.                    |
-| `--no-cache`     | Ignore step cache.                             |
-
-### `env run step`
-
-Run a single named step.
-
-```bash
-previewctl -e my-env env run step generate_nginx
-previewctl -e my-env env run step generate_nginx --dry-run
-previewctl -e my-env env run step generate_nginx --print
-```
-
-| Flag        | Description                                          |
-|-------------|------------------------------------------------------|
-| `--dry-run` | Show diff of current vs generated output.            |
-| `--print`   | Dump full generated content to stdout.               |
-
-### `env run runner`
-
-Run the runner pipeline.
-
-```bash
-previewctl -e my-env env run runner
-previewctl -e my-env env run runner --manifest path/to/manifest.yaml
-previewctl -e my-env env run runner --from start_services
-```
-
-| Flag               | Description                                 |
-|--------------------|---------------------------------------------|
-| `--manifest <path>` | Path to a custom runner manifest.           |
-| `--from <step>`    | Start from a specific step.                 |
-| `--no-cache`       | Ignore step cache.                          |
-
----
-
-## Provisioner Commands
-
-Run individual provisioner lifecycle actions for external services.
-
-```bash
-previewctl -e my-env env provisioner db init
-previewctl -e my-env env provisioner db seed
-previewctl -e my-env env provisioner db reset
-previewctl -e my-env env provisioner db destroy
-```
-
-| Subcommand | Description                                           |
-|------------|-------------------------------------------------------|
-| `init`     | Initialize the external service.                      |
-| `seed`     | Seed the service with initial data.                   |
-| `reset`    | Reset the service to a clean state.                   |
-| `destroy`  | Tear down the external service.                       |

@@ -19,7 +19,7 @@ Namespaces are fixed identifiers (`self`, `services`, `infrastructure`, `provisi
 | `{{self.port}}` | The current service's allocated port | Only inside a service `env` block |
 | `{{services.<name>.port}}` | A named service's allocated port | Anywhere |
 | `{{infrastructure.<name>.port}}` | An infrastructure service's allocated port | Anywhere |
-| `{{provisioner.<service>.<OUTPUT>}}` | A provisioner hook's output value | After the provisioner service runs |
+| `{{provisioner.<service>.<OUTPUT>}}` | A core service hook's output value | After the core service runs |
 | `{{env.name}}` | The environment name | Anywhere |
 | `{{store.<KEY>}}` | A value from the persistent store | Anywhere (errors if the key is missing) |
 | `{{proxy.url.<service>}}` | Full proxy URL: `https://{env}--{service}.{domain}` | Requires proxy domain configured |
@@ -32,7 +32,7 @@ Template variables are resolved at manifest build time during the provisioner ph
 This means:
 
 - Port allocations must complete before templates resolve.
-- Provisioner service hooks must finish before their outputs are available.
+- Core service hooks must finish before their outputs are available.
 - Store keys must be set before any template referencing them is evaluated.
 
 ## Error Behavior
@@ -42,7 +42,7 @@ previewctl treats unresolvable variables as hard errors at build time:
 - **Unknown namespace** -- `{{unknown.foo}}` produces an error.
 - **Missing service** -- `{{services.nonexistent.port}}` produces an error if no service by that name is defined.
 - **Unset store key** -- `{{store.MISSING_KEY}}` produces an error if the key has not been set.
-- **Missing provisioner output** -- `{{provisioner.db.CONNECTION_URL}}` produces an error if the provisioner service `db` did not emit `CONNECTION_URL`.
+- **Missing core service output** -- `{{provisioner.db.CONNECTION_URL}}` produces an error if the core service `db` did not emit `CONNECTION_URL`.
 
 There are no silent empty strings. If a variable cannot be resolved, the build fails with a message identifying the unresolvable variable.
 
@@ -66,9 +66,9 @@ services:
       GATEWAY_URL: "http://localhost:{{services.gateway.port}}"
 ```
 
-### Using provisioner output for DATABASE_URL
+### Using core service output for DATABASE_URL
 
-A provisioner service creates a database and emits connection details. Downstream services consume the output:
+A core service creates a database and emits connection details. Downstream services consume the output:
 
 ```yaml
 provisioner:
@@ -114,13 +114,29 @@ services:
       CORS_ORIGIN: "{{proxy.url.web}}"
 ```
 
-### Using store for dynamically provisioned values
+### Using GLOBAL_ for dynamically provisioned values
 
-A provisioner hook sets a value in the store, and later configuration references it:
+A compute create hook auto-persists values to the store, and later configuration references them:
 
 ```bash
-# In a provisioner hook:
-"$PCTL" -m "$PREVIEWCTL_MODE" -e "$PREVIEWCTL_ENV_NAME" env store set REDIS_URL="redis://10.0.0.5:6379"
+#!/usr/bin/env bash
+set -euo pipefail
+# In the compute create hook:
+echo "GLOBAL_GCP_ZONE=$ZONE"
+echo "GLOBAL_VM_NAME=$VM_NAME"
+```
+
+```yaml
+provisioner:
+  compute:
+    ssh:
+      proxy_command: "gcloud compute start-iap-tunnel {{store.VM_NAME}} 22 --zone={{store.GCP_ZONE}}"
+```
+
+For manual overrides or values not produced by hooks, use `previewctl store set`:
+
+```bash
+previewctl -e my-env store set REDIS_URL="redis://10.0.0.5:6379"
 ```
 
 ```yaml

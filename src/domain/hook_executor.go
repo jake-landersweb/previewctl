@@ -98,6 +98,18 @@ func sanitizeOutputLine(line string) string {
 	return strings.TrimSpace(key) + "=********"
 }
 
+// extractGlobalOutputs returns outputs with the GLOBAL_ prefix, stripping the
+// prefix from the key. These are auto-persisted to the environment store.
+func extractGlobalOutputs(outputs map[string]string) map[string]string {
+	globals := make(map[string]string)
+	for key, value := range outputs {
+		if strings.HasPrefix(key, "GLOBAL_") {
+			globals[strings.TrimPrefix(key, "GLOBAL_")] = value
+		}
+	}
+	return globals
+}
+
 // parseHookOutput parses KEY=VALUE lines from hook stdout.
 // Blank lines and lines starting with # are skipped.
 func parseHookOutput(output string) map[string]string {

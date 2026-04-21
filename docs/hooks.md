@@ -65,12 +65,12 @@ For example, a store key `redis-url` produces `PREVIEWCTL_STORE_REDIS_URL`.
 | `PREVIEWCTL_VM_IP` | SSH host from stored compute info |
 | `PREVIEWCTL_SSH_USER` | SSH user from stored compute info |
 
-### Provisioner Service Hooks
+### Core Service Hooks
 
 | Variable | Value |
 |----------|-------|
 | `PREVIEWCTL_ACTION` | Hook action: `init`, `seed`, `reset`, or `destroy` |
-| `PREVIEWCTL_SERVICE_NAME` | Name of the provisioner service |
+| `PREVIEWCTL_SERVICE_NAME` | Name of the core service |
 
 ## Hook Outputs
 
@@ -82,9 +82,26 @@ DATABASE_URL=postgres://user:pass@host:5432/mydb
 CACHE_URL=redis://host:6379
 ```
 
-For provisioner service hooks, previewctl validates that all keys declared in the `outputs` list appear in stdout. If any declared output is missing, the hook fails with an error.
+For core service hooks, previewctl validates that all keys declared in the `outputs` list appear in stdout. If any declared output is missing, the hook fails with an error.
 
 Use stderr for progress messages and debug logging. Only stdout is parsed for output values.
+
+### GLOBAL_ Auto-Capture
+
+Any hook output line with a `GLOBAL_` prefix is automatically persisted to the environment's persistent store, with the prefix stripped. This eliminates the need for hook scripts to call `previewctl store set`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+ZONE=$(create_vm)
+echo "GLOBAL_GCP_ZONE=$ZONE"     # Auto-persisted as GCP_ZONE in the store
+echo "GLOBAL_VM_NAME=$VM_NAME"   # Auto-persisted as VM_NAME in the store
+```
+
+After execution, `GCP_ZONE` and `VM_NAME` are available as `PREVIEWCTL_STORE_GCP_ZONE` and `PREVIEWCTL_STORE_VM_NAME` in subsequent hooks, and as `{{store.GCP_ZONE}}` and `{{store.VM_NAME}}` in config templates.
+
+`GLOBAL_` outputs are per-environment and opt-in. They coexist with the `outputs:` mechanism on core services, which is scoped, validated, and required.
 
 ## Hook Types
 
@@ -102,7 +119,7 @@ Use stderr for progress messages and debug logging. Only stdout is parsed for ou
 | Compute create | `provisioner.compute.create` | During the `create_compute` step |
 | Compute destroy | `provisioner.compute.destroy` | During environment destruction |
 
-### Provisioner Service Hooks
+### Core Service Hooks
 
 Defined per service under `provisioner.services.<name>`:
 
@@ -165,9 +182,9 @@ echo "Database created successfully" >&2
 echo "DATABASE_URL=postgres://user:pass@host:5432/${PREVIEWCTL_ENV_NAME}"
 ```
 
-### Use the store for cross-hook state
+### Use GLOBAL_ for cross-hook state
 
-When one hook produces a value that a later hook or template needs, persist it to the store:
+When one hook produces a value that a later hook or template needs, use the `GLOBAL_` prefix to auto-persist it to the store:
 
 ```bash
 #!/usr/bin/env bash
@@ -176,11 +193,12 @@ set -euo pipefail
 VM_IP=$(create_vm)
 echo "VM provisioned at $VM_IP" >&2
 
-# Persist to store so later hooks and templates can access it
-"$PCTL" -m "$PREVIEWCTL_MODE" -e "$PREVIEWCTL_ENV_NAME" env store set VM_IP="$VM_IP"
+# Auto-persisted to the environment store
+echo "GLOBAL_VM_IP=$VM_IP"
+echo "GLOBAL_GCP_ZONE=$ZONE"
 ```
 
-Later hooks receive the value as `PREVIEWCTL_STORE_VM_IP`, and config templates can reference it as `{{store.VM_IP}}`.
+Later hooks receive the values as `PREVIEWCTL_STORE_VM_IP` and `PREVIEWCTL_STORE_GCP_ZONE`, and config templates can reference them as `{{store.VM_IP}}` and `{{store.GCP_ZONE}}`.
 
 ### Reference injected variables in scripts
 

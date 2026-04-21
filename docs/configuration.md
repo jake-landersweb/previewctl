@@ -19,7 +19,7 @@ previewctl searches for `previewctl.yaml` starting from the current working dire
 
 ### `provisioner`
 
-The provisioner block defines hook-driven lifecycle management for compute resources and external services.
+The provisioner block defines hook-driven lifecycle management for compute resources and core services.
 
 ```yaml
 provisioner:
@@ -64,6 +64,8 @@ provisioner:
 | `provisioner.services.<name>.reset` | string | — | Hook to reset the service to a clean state. |
 | `provisioner.services.<name>.destroy` | string | — | Hook to tear down the service. |
 
+Core services are managed via the CLI with `previewctl core <service> <action>`.
+
 ### `infrastructure`
 
 Declares a Docker Compose file for infrastructure services (databases, caches, message brokers, etc.) that previewctl manages per-environment.
@@ -78,6 +80,8 @@ infrastructure:
 | `infrastructure.compose_file` | string | — | Path to a Docker Compose file, relative to the project root. |
 
 Port mappings in the compose file should use the container-only form (e.g., `"5432"`) so previewctl can allocate unique host ports per environment.
+
+Infrastructure containers can be managed independently with `previewctl infra start|stop|restart|logs`.
 
 ### `services`
 
@@ -122,7 +126,7 @@ services:
 
 ### `runner`
 
-The runner block controls deployment lifecycle hooks and Docker Compose generation for remote environments.
+The runner block controls deployment lifecycle hooks and Docker Compose generation.
 
 ```yaml
 runner:
@@ -162,10 +166,10 @@ Template variables use `{{double.brace}}` syntax and are resolved at environment
 |---------|---------|-------------|
 | `{{services.<name>.port}}` | `{{services.backend.port}}` | Allocated port for an application service. |
 | `{{infrastructure.<name>.port}}` | `{{infrastructure.postgres.port}}` | Allocated port for an infrastructure service. |
-| `{{provisioner.<service>.<output>}}` | `{{provisioner.database.DATABASE_URL}}` | Output value from a provisioner service hook. |
+| `{{provisioner.<service>.<output>}}` | `{{provisioner.database.DATABASE_URL}}` | Output value from a core service hook. |
 | `{{self.port}}` | `{{self.port}}` | Port of the current service (only valid inside a service `env` block). |
 | `{{env.name}}` | `{{env.name}}` | Name of the current environment. |
-| `{{store.<key>}}` | `{{store.VM_NAME}}` | Value from the persistent key-value store (set via `previewctl env store set`). |
+| `{{store.<key>}}` | `{{store.VM_NAME}}` | Value from the persistent key-value store (set via `previewctl store set` or `GLOBAL_` auto-capture). |
 | `{{proxy.domain}}` | `{{proxy.domain}}` | The configured proxy domain from `runner.compose.proxy.domain`. |
 | `{{proxy.url.<service>}}` | `{{proxy.url.web}}` | Full URL for a service: `https://{env}--{service}.{domain}`. |
 
@@ -176,10 +180,10 @@ previewctl supports mode-specific configuration overlays. For a mode named `remo
 The overlay file is loaded via the `--mode` flag:
 
 ```bash
-previewctl -e my-feature --mode remote env create
+previewctl -m remote -e my-feature create
 ```
 
-When `--mode` is omitted, previewctl infers the mode from the stored environment state (if the environment already exists) or defaults to `local`.
+When `--mode` is omitted (on commands other than `create`), previewctl infers the mode from the stored environment state. On `create`, `--mode` is required.
 
 An overlay file has the same schema as the base config. Only the fields you want to change need to be present -- everything else is inherited from the base.
 
