@@ -10,16 +10,18 @@ import (
 )
 
 // allRunnerSteps defines all runner steps in execution order.
+// Order must match Manager.BuildRunnerStepOrder in domain/manager.go so that
+// `refresh --from <step>` selects the correct suffix of the canonical pipeline.
 var allRunnerSteps = []string{
 	"sync_code",
 	"generate_manifest",
+	"runner_before",
 	"generate_env",
 	"start_infra",
 	"generate_compose",
+	"generate_nginx",
 	"build_services",
 	"start_services",
-	"generate_nginx",
-	"runner_before",
 	"runner_deploy",
 	"runner_after",
 }

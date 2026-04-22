@@ -1099,8 +1099,11 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 		}
 		m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepCompleted, Message: *syncOpts.CompleteMsg})
 
-		// Code changed — invalidate build and restart steps so they re-run.
-		for _, step := range []string{"build_services", "start_services"} {
+		// Code changed — invalidate runner_before so VM-side setup scripts
+		// (dep install, perms fixes, system config) re-run against the freshly
+		// synced code, and invalidate build/restart so services pick up the
+		// new outputs.
+		for _, step := range []string{"runner_before", "build_services", "start_services"} {
 			entry.InvalidateStep(step, "code synced, rebuild required")
 		}
 	}
