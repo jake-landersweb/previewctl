@@ -990,6 +990,11 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, baseBranc
 					return err
 				}
 				provisionerOutputs[svcNameCopy] = outputs
+				// Auto-capture GLOBAL_ prefixed outputs to env store
+				globals := extractGlobalOutputs(outputs)
+				for k, v := range globals {
+					entry.SetEnv(k, v)
+				}
 				return nil
 			},
 			Outputs: func() map[string]any {
@@ -1343,7 +1348,23 @@ func (m *Manager) RunCoreHook(ctx context.Context, svcName, action, envName stri
 	if entry != nil {
 		ports = entry.Ports
 	}
-	return m.runCoreHook(ctx, svcName, action, envName, ports)
+	outputs, err := m.runCoreHook(ctx, svcName, action, envName, ports)
+	if err != nil {
+		return nil, err
+	}
+
+	// Auto-capture GLOBAL_ prefixed outputs to the environment store
+	if entry != nil {
+		globals := extractGlobalOutputs(outputs)
+		if len(globals) > 0 {
+			for k, v := range globals {
+				entry.SetEnv(k, v)
+			}
+			_ = m.state.SetEnvironment(ctx, envName, entry)
+		}
+	}
+
+	return outputs, nil
 }
 
 func (m *Manager) runCoreHook(ctx context.Context, svcName, action, envName string, ports PortMap, store ...map[string]string) (map[string]string, error) {
@@ -1468,6 +1489,11 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 					entry.ProvisionerOutputs = make(map[string]map[string]string)
 				}
 				entry.ProvisionerOutputs[svcName] = outputs
+				// Auto-capture GLOBAL_ prefixed outputs to env store
+				globals := extractGlobalOutputs(outputs)
+				for k, v := range globals {
+					entry.SetEnv(k, v)
+				}
 				return m.state.SetEnvironment(ctx, envName, entry)
 			}
 			return nil

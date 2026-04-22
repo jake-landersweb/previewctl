@@ -39,11 +39,11 @@ go install github.com/jake-landersweb/previewctl/src/cmd/previewctl@latest
    ```
 3. Initialize your template database:
    ```bash
-   previewctl provisioner postgres init
+   previewctl core postgres init
    ```
 4. Create an environment:
    ```bash
-   previewctl create my-feature --branch feat/my-feature
+   previewctl -m local -e my-feature create --branch feat/my-feature
    ```
 
 ## Commands
@@ -51,50 +51,71 @@ go install github.com/jake-landersweb/previewctl/src/cmd/previewctl@latest
 ### Environment lifecycle
 
 ```
-previewctl create <name> [-b branch]       Create a new environment (provision + run)
-previewctl attach [name] [-w path]         Attach to an existing worktree
-previewctl delete [name] [-m mode]         Destroy an environment and its resources
-previewctl list [--json]                   List all environments
-previewctl status [name]                   Show environment details
+previewctl create -e <name> -m <mode>   Create a new environment (provision + run)
+previewctl create -w <path>             Attach to an existing worktree
+previewctl delete -e <name>             Destroy an environment and its resources
+previewctl list [--json]                List all environments
+previewctl status -e <name>             Show environment details
+previewctl refresh [--only] [--from]    Re-run steps after config/code changes
 ```
 
-### Provisioner & runner (split workflow)
-
-For CI/remote workflows where provisioning and running happen on different machines:
+### Step execution
 
 ```
-previewctl provision <name> [-b branch] [-m mode]   Provision only (create compute, seed, write manifest)
-previewctl run [--manifest path]                     Run only (install deps, env files, start infra)
+previewctl step <step-name> -e <name>   Re-run a single step in isolation
+previewctl steps -e <name> [--audit]    Show step status or audit log
 ```
 
-`provision` creates the compute resources, seeds external services, and writes `.previewctl.json`. The environment is saved in "provisioned" state.
-
-`run` reads the manifest and executes the runner phase — hooks, env file generation, docker compose, deploy.
-
-Both support `--from <step>` to resume from a specific step and `--no-cache` to force a full re-run.
-
-### Step inspection
+### Split workflow (CI/remote)
 
 ```
-previewctl steps [name]           Show step-by-step status (✓ completed, ✗ failed, · pending)
-previewctl steps [name] --audit   Show full chronological audit log
+previewctl run provision -e <name>      Provision only (create compute, seed, write manifest)
+previewctl run runner [--manifest]      Run only (env files, infra, deploy)
 ```
 
-### Provisioner services
+### Core services
 
 ```
-previewctl provisioner <service> init          One-time setup (e.g., create template DB)
-previewctl provisioner <service> seed [env]    Seed for a specific environment
-previewctl provisioner <service> reset [env]   Reset (drop + re-seed)
-previewctl provisioner <service> destroy [env] Tear down for a specific environment
+previewctl core <service> init          One-time setup (e.g., create template DB)
+previewctl core <service> seed          Seed for a specific environment
+previewctl core <service> reset         Reset (drop + re-seed)
+previewctl core <service> destroy       Tear down for a specific environment
+```
+
+### Infrastructure
+
+```
+previewctl infra start [service...]     Start infrastructure containers
+previewctl infra stop [service...]      Stop infrastructure containers
+previewctl infra restart [service...]   Restart infrastructure containers
+previewctl infra logs [service...]      View infrastructure logs
+```
+
+### Remote-only
+
+```
+previewctl ssh -e <name>                SSH into a remote environment
+previewctl service start <svc>          Start an app service
+previewctl service stop <svc>           Stop an app service
+previewctl service restart <svc>        Restart an app service
+previewctl service logs [svc]           Stream app service logs
+previewctl service list                 List services with status
+```
+
+### Persistent store
+
+```
+previewctl store set KEY=VALUE          Set store values
+previewctl store get KEY                Get a store value
+previewctl store list                   List all store values
 ```
 
 ### Maintenance
 
 ```
-previewctl vet                    Validate previewctl.yaml
-previewctl clean [--dry-run]      Find and remove orphaned worktrees and containers
-previewctl version                Show version and check for updates
+previewctl vet                          Validate previewctl.yaml
+previewctl clean [--dry-run]            Find and remove orphaned resources
+previewctl version                      Show version and check for updates
 ```
 
 ## Configuration
@@ -155,7 +176,7 @@ infrastructure:
 Base config (`previewctl.yaml`) declares **what** — service outputs, app services, env templates.
 Overlay files (`previewctl.local.yaml`, `previewctl.remote.yaml`) declare **how** — hooks, compose files, mode-specific scripts.
 
-The tool loads `previewctl.yaml` + `previewctl.{mode}.yaml` and deep-merges them. Mode defaults to `local`; use `--mode remote` for CI workflows.
+The tool loads `previewctl.yaml` + `previewctl.{mode}.yaml` and deep-merges them. Mode is specified with `--mode` on `create`; inferred from state for all other commands.
 
 ### Template variables
 
@@ -164,7 +185,11 @@ The tool loads `previewctl.yaml` + `previewctl.{mode}.yaml` and deep-merges them
 | `{{self.port}}` | Allocated port for the current service |
 | `{{services.<name>.port}}` | Allocated port for an application service |
 | `{{infrastructure.<name>.port}}` | Allocated port for an infrastructure service |
-| `{{provisioner.<service>.<OUTPUT>}}` | Output from a provisioner service hook |
+| `{{provisioner.<service>.<OUTPUT>}}` | Output from a core service hook |
+| `{{env.name}}` | Name of the current environment |
+| `{{store.<KEY>}}` | Value from the persistent store |
+| `{{proxy.url.<service>}}` | Full HTTPS URL for a service through the proxy |
+| `{{proxy.domain}}` | The configured proxy domain |
 
 ### Hook environment variables
 
@@ -173,25 +198,35 @@ All hooks receive these environment variables:
 | Variable | Description |
 |---|---|
 | `PREVIEWCTL_ENV_NAME` | Raw environment name (e.g., `feat/my-feature`) |
-| `PREVIEWCTL_ENVIRONMENT_NAME` | Sanitized name safe for databases, compose, file paths (e.g., `feat_my-feature`) |
+| `PREVIEWCTL_ENVIRONMENT_NAME` | Sanitized name safe for databases, compose, file paths |
 | `PREVIEWCTL_PROJECT_NAME` | Project name from config |
 | `PREVIEWCTL_PROJECT_ROOT` | Absolute path to the project root |
 | `PREVIEWCTL_WORKTREE_PATH` | Path to the worktree (when available) |
-| `PREVIEWCTL_PORT_<NAME>` | Allocated port for each service (e.g., `PREVIEWCTL_PORT_BACKEND`) |
+| `PREVIEWCTL_PORT_<NAME>` | Allocated port for each service |
+| `PREVIEWCTL_STORE_<KEY>` | Value from the persistent store |
 
-Provisioner service hooks also receive `PREVIEWCTL_ACTION` and `PREVIEWCTL_SERVICE_NAME`.
+Core service hooks also receive `PREVIEWCTL_ACTION` and `PREVIEWCTL_SERVICE_NAME`.
 
-### Provisioner services
+### Hook outputs and GLOBAL_ auto-capture
 
-Provisioner services manage external resources (databases, branches, etc.) via lifecycle hooks. Declare outputs in the base config, define hooks in overlay files.
+Hooks write `KEY=VALUE` pairs to stdout. Core service outputs are validated against the declared list and made available as template variables.
 
-Hooks write `KEY=VALUE` pairs to stdout. Outputs are validated against the declared list and made available as template variables.
+Any output prefixed with `GLOBAL_` is automatically persisted to the environment's persistent store (with the prefix stripped). This eliminates the need for hook scripts to depend on the previewctl CLI:
+
+```bash
+echo "GLOBAL_GCP_ZONE=us-central1-a"   # Persisted as GCP_ZONE in the store
+echo "GLOBAL_VM_NAME=preview-pr-42"     # Persisted as VM_NAME in the store
+```
+
+### Core services
+
+Core services manage external resources (databases, branches, etc.) via lifecycle hooks. Declare outputs in the base config, define hooks in overlay files.
 
 | Hook | When | Example |
 |------|------|---------|
-| `init` | `previewctl provisioner <name> init` | Create template DB |
-| `seed` | During `previewctl create` / `provision` | Clone from template |
-| `reset` | `previewctl provisioner <name> reset [env]` | Drop + re-clone |
+| `init` | `previewctl core <name> init` | Create template DB |
+| `seed` | During `previewctl create` | Clone from template |
+| `reset` | `previewctl core <name> reset` | Drop + re-clone |
 | `destroy` | During `previewctl delete` | Drop database |
 
 ### Runner hooks
@@ -212,8 +247,8 @@ Runs both phases in sequence:
 **Provisioner phase:**
 1. `provisioner.before` hook
 2. Create git worktree for code isolation
-3. Allocate deterministic ports (FNV-1a hash, range 61000–65000)
-4. Run provisioner service seed hooks (e.g., clone database)
+3. Allocate deterministic ports (FNV-1a hash, range 61000-65000)
+4. Run core service seed hooks (e.g., clone database)
 5. Build manifest — resolve all template variables
 6. Write `.previewctl.json` to worktree
 7. `provisioner.after` hook
@@ -226,36 +261,37 @@ Runs both phases in sequence:
 12. `runner.deploy` hook
 13. `runner.after` hook (run migrations)
 
-### Remote: `previewctl provision` + `previewctl run`
+### Remote: `previewctl run provision` + `previewctl run runner`
 
-**On CI** (`previewctl provision pr-42 --mode remote`):
-1. `provisioner.compute.create` hook → creates VM, clones repo
+**On CI** (`previewctl -m remote -e pr-42 create --branch feat/auth`):
+1. `provisioner.compute.create` hook -> creates VM, clones repo
 2. Allocate ports, seed external services
 3. Write `.previewctl.json` to VM via SSH
 4. Save state
 
-**On VM** (`previewctl run`):
+**On VM** (`previewctl run runner`):
 1. Read `.previewctl.json`
-2. `runner.before` → install deps
+2. `runner.before` -> install deps
 3. Generate `.env` files
 4. `docker compose up`
-5. `runner.deploy` → start services
-6. `runner.after` → setup DNS, post PR comment
+5. `runner.deploy` -> start services
+6. `runner.after` -> setup DNS, post PR comment
 
 ### Resumability
 
 Every step is checkpointed to state immediately after completion. If an operation fails:
 
 - **Re-run the same command** — completed steps are skipped, execution resumes from the failure point
-- **`--from <step>`** — force re-execution from a specific step (invalidates all subsequent steps)
-- **`--no-cache`** — skip all checkpoints, re-run everything
-- **`previewctl steps <name>`** — inspect which steps completed and which failed
+- **`previewctl refresh`** — re-run all runner steps with caching disabled
+- **`previewctl refresh --from <step>`** — re-run from a specific step onward
+- **`previewctl refresh --only <steps>`** — re-run only specific steps
+- **`previewctl steps`** — inspect which steps completed and which failed
 
 Stateful steps (`create_compute`, `start_infra`) verify their side effects before skipping — e.g., checking the worktree still exists or containers are still running.
 
 ### Attach mode
 
-`previewctl attach` provisions an environment using an existing worktree (e.g., one created by Claude Code or `git worktree add`). The worktree is not managed by previewctl and will not be removed on delete — only containers are stopped.
+`previewctl create --worktree <path>` provisions an environment using an existing worktree (e.g., one created by Claude Code, GitHub Codex, or `git worktree add`). The worktree is not managed by previewctl and will not be removed on delete — only containers are stopped.
 
 ## Manifest
 

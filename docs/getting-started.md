@@ -80,29 +80,29 @@ This validates the YAML structure, checks that referenced files and paths exist,
 ## Create your first environment
 
 ```bash
-previewctl -e my-feature env create --branch my-feature
+previewctl -m local -e my-feature create --branch my-feature
 ```
 
 Here is what happens when you run this command:
 
-1. **Worktree** -- previewctl creates a new git worktree for the `my-feature` branch under `~/.cache/previewctl/my-project/worktrees/my-feature/`.
+1. **Worktree** -- previewctl creates a new git worktree for the `my-feature` branch under `~/.previewctl/worktrees/my-project/my-feature/`.
 2. **Port allocation** -- unique ports are allocated from the range 61000-65000 for every infrastructure and application service.
 3. **Infrastructure** -- Docker Compose starts Postgres and Redis with the allocated ports.
 4. **Env files** -- `.env.local` files are generated inside each service's directory with all template variables resolved to their concrete values.
 5. **State** -- the environment is recorded in local state so subsequent commands can find it.
 
-The `--branch` flag defaults to the environment name if omitted, so `previewctl -e my-feature env create` works the same way when the branch name matches.
+The `--branch` flag defaults to the environment name if omitted, so `previewctl -m local -e my-feature create` works the same way when the branch name matches.
 
 You can also attach to an existing worktree (one created manually or by another tool) instead of letting previewctl manage it:
 
 ```bash
-previewctl -e my-feature env create --worktree /path/to/existing/worktree
+previewctl -m local create --worktree /path/to/existing/worktree
 ```
 
 Use `--dry-run` to preview what would happen without making any changes:
 
 ```bash
-previewctl -e my-feature env create --dry-run
+previewctl -m local -e my-feature create --dry-run
 ```
 
 ## Inspect
@@ -110,7 +110,7 @@ previewctl -e my-feature env create --dry-run
 View the current state of an environment:
 
 ```bash
-previewctl -e my-feature env status
+previewctl -e my-feature status
 ```
 
 This shows the branch, mode (local or remote), overall status, whether infrastructure is running, provisioner outputs, and allocated ports for each service.
@@ -118,27 +118,37 @@ This shows the branch, mode (local or remote), overall status, whether infrastru
 For a step-by-step breakdown of which provisioner and runner phases have completed, failed, or are still pending:
 
 ```bash
-previewctl -e my-feature env steps
+previewctl -e my-feature steps
 ```
 
 Add `--audit` for a full chronological log of every action taken:
 
 ```bash
-previewctl -e my-feature env steps --audit
+previewctl -e my-feature steps --audit
 ```
 
-## Update
+## Refresh
 
-Re-running `env create` on an existing environment is safe. previewctl tracks which steps have already completed and skips them. Only new or failed steps are executed:
+After editing `previewctl.yaml` or making config changes, refresh the environment to re-apply:
 
 ```bash
-previewctl -e my-feature env create
+previewctl refresh
 ```
 
-To force a full re-run and ignore the step cache:
+To only regenerate env files:
 
 ```bash
-previewctl -e my-feature env create --no-cache
+previewctl refresh --only generate_env
+```
+
+## Manage infrastructure
+
+Start, stop, restart, or view logs for infrastructure containers:
+
+```bash
+previewctl -e my-feature infra start
+previewctl -e my-feature infra logs -f
+previewctl -e my-feature infra restart redis
 ```
 
 ## Delete
@@ -146,7 +156,7 @@ previewctl -e my-feature env create --no-cache
 Tear down an environment completely -- stops infrastructure, removes the worktree, and cleans up state:
 
 ```bash
-previewctl -e my-feature env delete
+previewctl -e my-feature delete
 ```
 
 If the worktree was attached (created externally via `--worktree`), it is left in place and only the previewctl state is removed.
@@ -156,12 +166,12 @@ If the worktree was attached (created externally via `--worktree`), it is left i
 See all environments tracked for the current project:
 
 ```bash
-previewctl env list
+previewctl list
 ```
 
 ## Next steps
 
 - **Remote mode** -- previewctl supports provisioning VMs and deploying services remotely via hook scripts. Use `--mode remote` and a `previewctl.remote.yaml` overlay to configure remote compute, SSH access, and reverse proxy settings.
 - **Configuration reference** -- see [configuration.md](configuration.md) for the full YAML schema, mode overlays, deep merge rules, and template variable reference.
-- **Provisioner services** -- declare external managed services (databases, queues) with lifecycle hooks for init, seed, reset, and destroy.
+- **Core services** -- declare external managed services (databases, queues) with lifecycle hooks for init, seed, reset, and destroy.
 - **Runner hooks** -- add before/after hooks and Docker Compose generation for remote deployments.

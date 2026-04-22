@@ -8,6 +8,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func newRunGroupCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Execute lifecycle phases",
+		Long: `Run individual lifecycle phases for an environment. These are
+advanced operations — most users should use 'create' or 'refresh' instead.`,
+	}
+
+	cmd.AddCommand(
+		newProvisionCmd(),
+		newRunnerCmd(),
+	)
+
+	return cmd
+}
+
 func newRunnerCmd() *cobra.Command {
 	var (
 		manifestPath string

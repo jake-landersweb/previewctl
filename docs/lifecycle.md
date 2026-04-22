@@ -9,18 +9,18 @@ previewctl splits environment setup into two phases:
 - **Provisioner phase** -- sets up WHERE the environment runs: compute resources, port allocations, and external services.
 - **Runner phase** -- sets up WHAT runs in the environment: dependencies, env files, infrastructure containers, and application services.
 
-These phases can run together with `env create` or independently:
+These phases can run together with `create` or independently:
 
 ```bash
 # Combined
-previewctl env create my-env
+previewctl -m local -e my-env create
 
-# Split
-previewctl env run provision my-env
-previewctl env run runner my-env
+# Split (CI/remote workflows)
+previewctl -e my-env run provision
+previewctl run runner
 ```
 
-Splitting is useful when provisioning and running happen on different machines (e.g., provisioning locally, running on a remote VM).
+Splitting is useful when provisioning and running happen on different machines (e.g., provisioning on CI, running on a remote VM).
 
 ## Provisioner Phase
 
@@ -32,7 +32,7 @@ Steps execute in this order:
 
 3. **allocate_ports** -- Assigns ports to each service deterministically using an FNV-1a hash of the environment name. Ports fall in the range 61000--65000. Services with a `port` value set explicitly in config use that fixed port instead.
 
-4. **seed_\*** -- One step per provisioner service that defines a `seed` hook. Each runs its seed script to set up external resources (databases, caches, etc.) and capture outputs.
+4. **seed_\*** -- One step per core service that defines a `seed` hook. Each runs its seed script to set up external resources (databases, caches, etc.) and capture outputs.
 
 5. **build_manifest** -- Resolves all template variables in `previewctl.yaml` and produces the final manifest object. See [Template Variables](template-variables.md) for details.
 
@@ -44,7 +44,7 @@ Steps execute in this order:
 
 Steps execute in this order:
 
-1. **sync_code** -- Only runs on re-runs when `runner_before` has already completed. Fetches from origin and resets the worktree to the latest commit on the target branch.
+1. **sync_code** -- Fetches from origin and resets the worktree to the latest commit on the target branch. Automatically skipped in local mode (you manage your own code locally).
 
 2. **runner_before** -- Optional hook. Typically used to install system-level dependencies.
 
@@ -82,19 +82,27 @@ If a verify check fails (e.g., a file was deleted or a container stopped), the s
 
 previewctl provides several mechanisms for controlling re-execution:
 
-- **`--from <step>`** -- Invalidates the specified step and all steps after it, forcing them to re-execute. Earlier steps remain cached.
+- **`refresh`** -- Re-runs all runner steps with caching disabled. Use `--only` to target specific steps or `--from` to start from a specific point.
 
   ```bash
-  previewctl env run runner my-env --from generate_env
+  previewctl refresh
+  previewctl refresh --only generate_env
+  previewctl refresh --from build_services
+  ```
+
+- **`--from <step>`** -- On `run provision` or `run runner`, invalidates the specified step and all steps after it, forcing them to re-execute.
+
+  ```bash
+  previewctl run runner --from generate_env
   ```
 
 - **`--no-cache`** -- Skips all checkpoint checks and re-executes every step.
 
   ```bash
-  previewctl env run runner my-env --no-cache
+  previewctl -e my-env create --no-cache
   ```
 
-- **Failed creation** -- If `env create` fails partway through, re-running the same command picks up from the failed step. There is no need to destroy and recreate.
+- **Failed creation** -- If `create` fails partway through, re-running the same command picks up from the failed step. There is no need to destroy and recreate.
 
 ## Audit Log
 
@@ -102,12 +110,12 @@ Every step decision is recorded with:
 
 - Timestamp
 - Machine identifier
-- Action taken: `executed`, `skipped`, `verified`, `verify_failed`, `invalidated`, `failed`, or `reconciled`
+- Action taken: `executed`, `skipped`, `verified`, `verify_failed`, `invalidated`, or `failed`
 
 View the audit log with:
 
 ```bash
-previewctl env steps my-env --audit
+previewctl -e my-env steps --audit
 ```
 
 ## Attach Mode
@@ -115,7 +123,7 @@ previewctl env steps my-env --audit
 Use `--worktree` to attach an environment to an existing git worktree instead of having previewctl create one:
 
 ```bash
-previewctl env create my-env --worktree /path/to/existing/worktree
+previewctl -m local create --worktree /path/to/existing/worktree
 ```
 
 In attach mode, previewctl does not manage the worktree's lifecycle. The worktree is not deleted when the environment is destroyed.
@@ -132,11 +140,11 @@ Examples:
 
 ```bash
 # Creates branch "my-feature" from current HEAD
-previewctl env create my-feature
+previewctl -m local -e my-feature create
 
 # Creates branch "my-feature" from "main"
-previewctl env create my-feature --base main
+previewctl -m local -e my-feature create --base main
 
 # Uses existing branch "release/v2" as-is
-previewctl env create staging --branch release/v2
+previewctl -m local -e staging create --branch release/v2
 ```

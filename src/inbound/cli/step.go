@@ -59,10 +59,6 @@ Available steps:
 				return fmt.Errorf("--env (-e) is required for step")
 			}
 
-			if resolvedMode() != "remote" {
-				return fmt.Errorf("step command is only available for remote environments")
-			}
-
 			if !runnerSteps[stepName] {
 				return fmt.Errorf("unknown runner step '%s'", stepName)
 			}

@@ -31,7 +31,7 @@ Each environment stores the following fields:
 | `createdAt`          | Timestamp of environment creation.                            |
 | `updatedAt`          | Timestamp of last state update.                               |
 | `ports`              | Map of service name to allocated port number.                 |
-| `provisionerOutputs` | Map of service name to key-value outputs from provisioner hooks. |
+| `provisionerOutputs` | Map of service name to key-value outputs from core service hooks. |
 | `compute`            | Compute details: type (`local`/`ssh`), host, user, path, managedWorktree, metadata. |
 | `env`                | Persistent key-value store (see below).                       |
 | `enabledServices`    | List of currently enabled service names.                      |
@@ -47,6 +47,8 @@ When `--mode` is omitted, previewctl infers the mode:
 3. If the environment is not found in either source, return an error.
 4. If `--env` is not set at all, default to `local`.
 
+**Note:** `--mode` is required on `create` since there is no existing state to infer from.
+
 ## Persistent Store
 
 Each environment has a key-value store for persisting arbitrary data across commands and hooks.
@@ -55,31 +57,35 @@ Each environment has a key-value store for persisting arbitrary data across comm
 
 ```bash
 # Set one or more values
-previewctl -e my-env env store set KEY=VALUE OTHER_KEY=OTHER_VALUE
+previewctl -e my-env store set KEY=VALUE OTHER_KEY=OTHER_VALUE
 
 # Get a single value
-previewctl -e my-env env store get KEY
+previewctl -e my-env store get KEY
 
 # List all stored key-value pairs
-previewctl -e my-env env store list
+previewctl -e my-env store list
 ```
+
+### GLOBAL_ Auto-Capture
+
+Hook scripts can auto-persist values to the store by outputting lines with the `GLOBAL_` prefix to stdout. For example, a hook that outputs `GLOBAL_GCP_ZONE=us-central1-a` will persist `GCP_ZONE=us-central1-a` to the environment store automatically. This eliminates the need for hook scripts to depend on the previewctl CLI binary.
 
 ### Integration with Hooks and Templates
 
 - Stored values are injected into hook scripts as environment variables prefixed with `PREVIEWCTL_STORE_`. For example, a stored key `ZONE` is available as `PREVIEWCTL_STORE_ZONE`.
 - Stored values are available in template expressions as `{{store.KEY}}`.
-- Common pattern: a compute create hook writes cloud-specific state (zone, project ID, VM name) to the store, and later hooks or config templates reference those values.
+- Common pattern: a compute create hook writes cloud-specific state (zone, project ID, VM name) to the store via `GLOBAL_` outputs, and later hooks or config templates reference those values.
 
 ## List Command
 
 ```bash
-previewctl env list
+previewctl list
 ```
 
 Queries both file and Postgres state backends, deduplicates results, and displays each environment with a mode badge (`local` or `remote`).
 
 ```bash
-previewctl env list --json
+previewctl list --json
 ```
 
 Outputs the environment list as JSON for scripting.

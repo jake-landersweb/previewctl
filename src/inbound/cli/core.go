@@ -9,50 +9,50 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newProvisionerCmd() *cobra.Command {
+func newCoreCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "provisioner",
-		Short: "Manage provisioner services",
-		Long:  "Manage provisioner services defined in your previewctl.yaml. Run 'previewctl provisioner <name> --help' to see available actions.",
+		Use:   "core",
+		Short: "Manage core services (e.g., postgres, redis)",
+		Long:  "Manage core services defined in your previewctl.yaml. Run 'previewctl core <name> --help' to see available actions.",
 	}
 
 	if cfg, _, err := loadConfig(); err == nil {
-		addProvisionerServiceCommands(cmd, cfg)
+		addCoreServiceCommands(cmd, cfg)
 	}
 
 	return cmd
 }
 
-func addProvisionerServiceCommands(parent *cobra.Command, cfg *domain.ProjectConfig) {
+func addCoreServiceCommands(parent *cobra.Command, cfg *domain.ProjectConfig) {
 	for name, svc := range cfg.Provisioner.Services {
-		svcCmd := newProvisionerServiceCmd(name, svc)
+		svcCmd := newCoreServiceCmd(name, svc)
 		parent.AddCommand(svcCmd)
 	}
 }
 
-func newProvisionerServiceCmd(name string, svc domain.ProvisionerServiceConfig) *cobra.Command {
+func newCoreServiceCmd(name string, svc domain.ProvisionerServiceConfig) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   name,
-		Short: fmt.Sprintf("Manage provisioner service: %s", name),
+		Short: fmt.Sprintf("Manage core service: %s", name),
 	}
 
 	if svc.Init != "" {
-		cmd.AddCommand(newProvisionerInitCmd(name))
+		cmd.AddCommand(newCoreInitCmd(name))
 	}
 	if svc.Seed != "" {
-		cmd.AddCommand(newProvisionerSeedCmd(name))
+		cmd.AddCommand(newCoreSeedCmd(name))
 	}
 	if svc.Reset != "" {
-		cmd.AddCommand(newProvisionerResetCmd(name))
+		cmd.AddCommand(newCoreResetCmd(name))
 	}
 	if svc.Destroy != "" {
-		cmd.AddCommand(newProvisionerDestroyCmd(name))
+		cmd.AddCommand(newCoreDestroyCmd(name))
 	}
 
 	return cmd
 }
 
-func newProvisionerInitCmd(svcName string) *cobra.Command {
+func newCoreInitCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
 		Short: "Run one-time initialization",
@@ -75,7 +75,7 @@ func newProvisionerInitCmd(svcName string) *cobra.Command {
 	}
 }
 
-func newProvisionerSeedCmd(svcName string) *cobra.Command {
+func newCoreSeedCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "seed",
 		Short: "Run the seed hook for a specific environment",
@@ -114,7 +114,7 @@ func newProvisionerSeedCmd(svcName string) *cobra.Command {
 	}
 }
 
-func newProvisionerResetCmd(svcName string) *cobra.Command {
+func newCoreResetCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "reset",
 		Short: "Reset this service for a specific environment",
@@ -148,7 +148,7 @@ func newProvisionerResetCmd(svcName string) *cobra.Command {
 	}
 }
 
-func newProvisionerDestroyCmd(svcName string) *cobra.Command {
+func newCoreDestroyCmd(svcName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "destroy",
 		Short: "Destroy this service for a specific environment",
