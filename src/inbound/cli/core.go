@@ -115,7 +115,8 @@ func newCoreSeedCmd(svcName string) *cobra.Command {
 }
 
 func newCoreResetCmd(svcName string) *cobra.Command {
-	return &cobra.Command{
+	var noPropagate bool
+	cmd := &cobra.Command{
 		Use:   "reset",
 		Short: "Reset this service for a specific environment",
 		Args:  cobra.NoArgs,
@@ -138,7 +139,8 @@ func newCoreResetCmd(svcName string) *cobra.Command {
 				styleDetail.Render(svcName),
 				styleDetail.Render(envName)))
 
-			if err := mgr.CoreReset(cmd.Context(), svcName, envName); err != nil {
+			opts := domain.CoreResetOpts{NoPropagate: noPropagate}
+			if err := mgr.CoreReset(cmd.Context(), svcName, envName, opts); err != nil {
 				return err
 			}
 
@@ -146,6 +148,9 @@ func newCoreResetCmd(svcName string) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&noPropagate, "no-propagate", false,
+		"Skip regenerating env files and restarting dependent services on the remote VM")
+	return cmd
 }
 
 func newCoreDestroyCmd(svcName string) *cobra.Command {

@@ -462,7 +462,7 @@ func TestManager_CoreReset(t *testing.T) {
 		},
 	}
 
-	err := mgr.CoreReset(ctx, "postgres", "feat-auth")
+	err := mgr.CoreReset(ctx, "postgres", "feat-auth", CoreResetOpts{NoPropagate: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -479,7 +479,7 @@ func TestManager_CoreReset_MissingEnv(t *testing.T) {
 	mgr, _, _ := newTestManagerWithCoreServices(t, tracker)
 	ctx := context.Background()
 
-	err := mgr.CoreReset(ctx, "postgres", "nonexistent")
+	err := mgr.CoreReset(ctx, "postgres", "nonexistent", CoreResetOpts{NoPropagate: true})
 	if err == nil {
 		t.Fatal("expected error for nonexistent environment")
 	}

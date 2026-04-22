@@ -358,7 +358,7 @@ func TestIntegration_CoreReset(t *testing.T) {
 	}
 
 	// Reset — should re-clone from template (losing env-specific data)
-	if err := mgr.CoreReset(ctx, "postgres", "reset-test"); err != nil {
+	if err := mgr.CoreReset(ctx, "postgres", "reset-test", domain.CoreResetOpts{NoPropagate: true}); err != nil {
 		t.Fatalf("CoreReset failed: %v", err)
 	}
 
