@@ -109,7 +109,12 @@ func (s *DomainSSHComputeAccess) execInternal(ctx context.Context, command strin
 	// Write environment variables to a temp file on the remote host, then source
 	// it before running the command. This avoids SSH command-line length limits
 	// that can silently truncate long inline export chains.
-	const remoteEnvFile = "/tmp/.previewctl-env.sh"
+	//
+	// Path is under $HOME (not /tmp) so different OS Login users on the same
+	// VM — e.g., a CI service account and a human developer — each own their
+	// own copy. A shared /tmp path caused EACCES whenever the second user
+	// tried to overwrite the first user's file.
+	const remoteEnvFile = "$HOME/.previewctl-env.sh"
 
 	var envContent strings.Builder
 	for _, e := range env {
