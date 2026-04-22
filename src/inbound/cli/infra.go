@@ -55,9 +55,6 @@ func resolveInfraTarget(ctx context.Context) (*infraTarget, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Infrastructure == nil || cfg.Infrastructure.ComposeFile == "" {
-		return nil, fmt.Errorf("no infrastructure compose file configured in previewctl.yaml")
-	}
 
 	home, _ := os.UserHomeDir()
 	statePath := filepath.Join(home, ".cache", "previewctl", cfg.Name, "state.json")
@@ -69,6 +66,17 @@ func resolveInfraTarget(ctx context.Context) (*infraTarget, error) {
 	entry, err := mgr.GetEnvironment(ctx, envName)
 	if err != nil {
 		return nil, fmt.Errorf("loading environment: %w", err)
+	}
+
+	return buildInfraTarget(mgr, cfg, entry, envName)
+}
+
+// buildInfraTarget constructs an infraTarget from an already-loaded environment
+// entry. Callers that have already resolved the manager + entry (e.g. the root
+// `status` command via mgr.Status) use this to avoid a second state lookup.
+func buildInfraTarget(mgr *domain.Manager, cfg *domain.ProjectConfig, entry *domain.EnvironmentEntry, envName string) (*infraTarget, error) {
+	if cfg.Infrastructure == nil || cfg.Infrastructure.ComposeFile == "" {
+		return nil, fmt.Errorf("no infrastructure compose file configured in previewctl.yaml")
 	}
 
 	t := &infraTarget{
@@ -101,6 +109,28 @@ func resolveInfraTarget(ctx context.Context) (*infraTarget, error) {
 	}
 
 	return t, nil
+}
+
+// fetchComposePs runs `docker compose ... ps --all --format json` against the
+// target's ComputeAccess and returns containers keyed by compose service name.
+// This includes BOTH infra services and runner services, since the generated
+// runner compose file and the user-provided infra compose file share the same
+// docker compose project name — compose ps filters by project label.
+func fetchComposePs(ctx context.Context, t *infraTarget) (map[string]composePsEntry, error) {
+	psCmd := t.composeCmd("ps", "--all", "--format", "json")
+	out, err := t.ca.Exec(ctx, psCmd, nil)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := parseComposePs([]byte(out))
+	if err != nil {
+		return nil, err
+	}
+	byService := make(map[string]composePsEntry, len(entries))
+	for _, e := range entries {
+		byService[e.Service] = e
+	}
+	return byService, nil
 }
 
 // composeCmd builds a `docker compose -f <file> -p <project> <sub> <args...>`
@@ -309,14 +339,12 @@ the check runs over SSH against the environment's compute host.`,
 				byService[e.Service] = e
 			}
 
+			// Only display services declared in the infrastructure compose file.
+			// `docker compose ps -p <project>` also returns runner/service containers
+			// that share the compose project name, which are not infra.
 			names := make([]string, 0, len(t.services))
 			for name := range t.services {
 				names = append(names, name)
-			}
-			for name := range byService {
-				if _, declared := t.services[name]; !declared {
-					names = append(names, name)
-				}
 			}
 			sort.Strings(names)
 

@@ -853,7 +853,16 @@ func (m *Manager) runProvisioner(ctx context.Context, envName, branch, baseBranc
 				var err error
 				computeOutputs, err = ExecuteCoreHook(ctx, m.config.Provisioner.Compute.Create,
 					m.config.Provisioner.Compute.Outputs, env, m.projectRoot, m.progress.StderrWriter())
-				return err
+				if err != nil {
+					return err
+				}
+				// Auto-capture GLOBAL_ prefixed outputs to env store so later SSH
+				// template rendering (e.g., proxy_command) can resolve them across
+				// machines even when the user's SSH config doesn't know the host.
+				for k, v := range extractGlobalOutputs(computeOutputs) {
+					entry.SetEnv(k, v)
+				}
+				return nil
 			},
 			Verify: func(ctx context.Context) error {
 				if ca == nil {
