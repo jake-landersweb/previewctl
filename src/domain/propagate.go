@@ -71,8 +71,9 @@ func (m *Manager) propagateProvisionerChange(ctx context.Context, envName, provi
 	if needsCompose {
 		verb = "up -d"
 	}
-	cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml %s %s",
-		verb, strings.Join(toRestart, " "))
+	projectName := ComposeProjectName(m.config.Name, envName)
+	cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s %s %s",
+		projectName, verb, strings.Join(toRestart, " "))
 	if _, err := ca.VerboseExec(ctx, cmd, nil); err != nil {
 		return fmt.Errorf("restarting services after %s change: %w", provisionerName, err)
 	}
@@ -113,8 +114,9 @@ func (m *Manager) SyncRemote(ctx context.Context, envName string) error {
 	sort.Strings(names)
 
 	ca := m.BuildSSHComputeAccess(entry)
-	cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml up -d %s",
-		strings.Join(names, " "))
+	projectName := ComposeProjectName(m.config.Name, envName)
+	cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s up -d %s",
+		projectName, strings.Join(names, " "))
 	if _, err := ca.VerboseExec(ctx, cmd, nil); err != nil {
 		return fmt.Errorf("restarting enabled services: %w", err)
 	}

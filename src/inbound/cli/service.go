@@ -65,7 +65,8 @@ func newServiceStartCmd() *cobra.Command {
 
 			// Start via compose
 			Header(fmt.Sprintf("Starting %s", styleDetail.Render(svcName)))
-			composeCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml up -d %s", svcName)
+			projectName := domain.ComposeProjectName(cfg.Name, entry.Name)
+			composeCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s up -d %s", projectName, svcName)
 			if _, err := ca.Exec(cmd.Context(), composeCmd, nil); err != nil {
 				return fmt.Errorf("starting service: %w", err)
 			}
@@ -94,7 +95,7 @@ func newServiceStopCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			svcName := args[0]
-			ca, _, entry, err := resolveRemoteEnvWithEntry(cmd)
+			ca, cfg, entry, err := resolveRemoteEnvWithEntry(cmd)
 			if err != nil {
 				return err
 			}
@@ -107,7 +108,8 @@ func newServiceStopCmd() *cobra.Command {
 			}
 
 			Header(fmt.Sprintf("Stopping %s", styleDetail.Render(svcName)))
-			composeCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml stop %s", svcName)
+			projectName := domain.ComposeProjectName(cfg.Name, entry.Name)
+			composeCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s stop %s", projectName, svcName)
 			if _, err := ca.Exec(cmd.Context(), composeCmd, nil); err != nil {
 				return fmt.Errorf("stopping service: %w", err)
 			}
@@ -136,7 +138,7 @@ func newServiceRestartCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			svcName := args[0]
-			ca, cfg, err := resolveRemoteEnv(cmd)
+			ca, cfg, entry, err := resolveRemoteEnvWithEntry(cmd)
 			if err != nil {
 				return err
 			}
@@ -155,7 +157,8 @@ func newServiceRestartCmd() *cobra.Command {
 			}
 
 			Header(fmt.Sprintf("Restarting %s", styleDetail.Render(svcName)))
-			composeCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml restart %s", svcName)
+			projectName := domain.ComposeProjectName(cfg.Name, entry.Name)
+			composeCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s restart %s", projectName, svcName)
 			if _, err := ca.Exec(cmd.Context(), composeCmd, nil); err != nil {
 				return fmt.Errorf("restarting service: %w", err)
 			}
@@ -328,7 +331,8 @@ func newServiceListCmd() *cobra.Command {
 			}
 
 			// Get running container state from docker compose
-			composeCmd := "docker compose -f .previewctl.compose.yaml ps --format '{{.Service}}\t{{.State}}\t{{.Status}}'"
+			projectName := domain.ComposeProjectName(cfg.Name, entry.Name)
+			composeCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s ps --format '{{.Service}}\t{{.State}}\t{{.Status}}'", projectName)
 			out, err := ca.Exec(cmd.Context(), composeCmd, nil)
 			if err != nil {
 				return fmt.Errorf("listing services: %w", err)
@@ -469,11 +473,13 @@ func refreshNginxProxy(cmd *cobra.Command) error {
 
 	// Restart nginx container to pick up the new config
 	Header("Restarting nginx proxy")
-	ca, _, err := resolveRemoteEnv(cmd)
+	ca, cfg, err := resolveRemoteEnv(cmd)
 	if err != nil {
 		return fmt.Errorf("resolving environment: %w", err)
 	}
-	if _, err := ca.Exec(cmd.Context(), "docker compose -f .previewctl.compose.yaml restart nginx", nil); err != nil {
+	projectName := domain.ComposeProjectName(cfg.Name, envName)
+	nginxCmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s restart nginx", projectName)
+	if _, err := ca.Exec(cmd.Context(), nginxCmd, nil); err != nil {
 		return fmt.Errorf("restarting nginx: %w", err)
 	}
 

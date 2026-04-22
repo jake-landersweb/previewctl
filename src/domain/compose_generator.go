@@ -40,10 +40,16 @@ func GenerateComposeFile(cfg *ProjectConfig, manifest *Manifest) ([]byte, error)
 			b.WriteString("      - ./preview/nginx.conf:/etc/nginx/conf.d/default.conf:ro\n")
 			b.WriteString("      - ./preview/error-pages:/app/preview/error-pages:ro\n")
 			b.WriteString("    healthcheck:\n")
-			b.WriteString("      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:80/health\"]\n")
+			// nginx:alpine ships busybox wget but not curl. Target 127.0.0.1
+			// explicitly — the 10-listen-on-ipv6-by-default.sh bootstrap can't
+			// edit our read-only mount, so nginx listens on IPv4 only, and
+			// `localhost` can resolve to ::1 first and fail. -T/-t bound the
+			// probe so a stuck check doesn't wedge compose's wait.
+			b.WriteString("      test: [\"CMD\", \"wget\", \"-q\", \"-T\", \"2\", \"-t\", \"1\", \"--spider\", \"http://127.0.0.1:80/health\"]\n")
 			b.WriteString("      interval: 5s\n")
 			b.WriteString("      timeout: 3s\n")
 			b.WriteString("      retries: 5\n")
+			b.WriteString("      start_period: 5s\n")
 			b.WriteString("    restart: unless-stopped\n")
 			b.WriteString("\n")
 		default:

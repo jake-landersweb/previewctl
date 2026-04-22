@@ -332,12 +332,15 @@ func (r *stepRegistry) startServices(ctx context.Context) StepOpts {
 				composeServices = append(composeServices, proxyType)
 			}
 			composeServices = append(composeServices, services...)
-			cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml up -d %s", strings.Join(composeServices, " "))
+			projectName := ComposeProjectName(cfg.Name, r.envName)
+			cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s up -d %s",
+				projectName, strings.Join(composeServices, " "))
 			_, err := r.ca.VerboseExec(ctx, cmd, nil)
 			return err
 		},
 		Verify: func(ctx context.Context) error {
-			cmd := "docker compose -f .previewctl.compose.yaml ps --format json"
+			projectName := ComposeProjectName(cfg.Name, r.envName)
+			cmd := fmt.Sprintf("docker compose -f .previewctl.compose.yaml -p %s ps --format json", projectName)
 			out, err := r.ca.Exec(ctx, cmd, nil)
 			if err != nil {
 				return err
