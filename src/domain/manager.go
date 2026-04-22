@@ -1468,7 +1468,16 @@ func (m *Manager) CoreInit(ctx context.Context, svcName string) error {
 	return nil
 }
 
-func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error {
+// CoreResetOpts configures the behavior of CoreReset.
+type CoreResetOpts struct {
+	// NoPropagate skips regenerating remote manifest/env/compose files and
+	// restarting dependent services after a successful reset. State is still
+	// updated with fresh provisioner outputs. Use this when you want to batch
+	// several resets and run a single SyncRemote at the end.
+	NoPropagate bool
+}
+
+func (m *Manager) CoreReset(ctx context.Context, svcName, envName string, opts CoreResetOpts) error {
 	svc, ok := m.config.Provisioner.Services[svcName]
 	if !ok {
 		return fmt.Errorf("unknown provisioner service '%s'", svcName)
@@ -1482,6 +1491,13 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 	}
 	if entry == nil {
 		return fmt.Errorf("environment '%s' not found", envName)
+	}
+	// Snapshot the store so we can detect which keys the hook mutated (via
+	// GLOBAL_* exports) and propagate their changes to services that
+	// reference {{store.KEY}}.
+	storeBefore := make(map[string]string, len(entry.Env))
+	for k, v := range entry.Env {
+		storeBefore[k] = v
 	}
 	resetMsg := fmt.Sprintf("Reset provisioner service %s for %s", svcName, envName)
 	if err := m.stepSimple(ctx, "core_reset",
@@ -1509,7 +1525,12 @@ func (m *Manager) CoreReset(ctx context.Context, svcName, envName string) error 
 		}); err != nil {
 		return fmt.Errorf("resetting provisioner service %s: %w", svcName, err)
 	}
-	return nil
+
+	if opts.NoPropagate {
+		return nil
+	}
+	changedStoreKeys := diffStoreKeys(storeBefore, entry.Env)
+	return m.propagateProvisionerChange(ctx, envName, svcName, changedStoreKeys)
 }
 
 // ---------- DomainLocalComputeAccess ----------

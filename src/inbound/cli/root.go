@@ -71,6 +71,7 @@ func Execute() {
 		// Remote-only
 		newSSHCmd(),
 		newServiceCmd(),
+		newSyncCmd(),
 
 		// Core services and infrastructure
 		newCoreCmd(),
