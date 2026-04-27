@@ -65,6 +65,30 @@ func (s *DomainSSHComputeAccess) User() string { return s.user }
 // ProxyCommand returns the configured proxy command, if any.
 func (s *DomainSSHComputeAccess) ProxyCommand() string { return s.proxyCommand }
 
+// EnsureRootWritable reassigns ownership of the remote root tree to the
+// current SSH user and relaxes its mode so subsequent host-side tools (pnpm,
+// turbo, etc.) can create and chmod files regardless of who touched the tree
+// last.
+//
+// This exists because OS Login hands each actor a distinct UID; files
+// created by one actor (CI service account, another human) are owned by
+// that UID, and chmod(2) on those inodes fails for anyone but the owner
+// even when the mode is world-writable. Call this at the top of any
+// operation that writes into the remote root from a potentially different
+// actor than the last writer.
+//
+// Idempotent and best-effort: failures are swallowed (`|| true`) because the
+// common case is already-correctly-owned, and we don't want to block the
+// happy path on an unrelated permission blip.
+func (s *DomainSSHComputeAccess) EnsureRootWritable(ctx context.Context) error {
+	script := fmt.Sprintf(
+		`sudo chown -R "$(whoami)":"$(id -gn)" %q 2>/dev/null || true; sudo chmod -R a+rwX %q 2>/dev/null || true`,
+		s.root, s.root,
+	)
+	_, err := s.Exec(ctx, script, nil)
+	return err
+}
+
 func (s *DomainSSHComputeAccess) WriteFile(ctx context.Context, relPath string, data []byte, _ os.FileMode) error {
 	remotePath := path.Join(s.root, relPath)
 
