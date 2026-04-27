@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -58,6 +59,9 @@ func newServiceStartCmd() *cobra.Command {
 			// Build if configured
 			if svc.Build != "" {
 				Header(fmt.Sprintf("Building %s", styleDetail.Render(svcName)))
+				if err := ensureRemoteWritable(cmd.Context(), ca); err != nil {
+					return fmt.Errorf("claiming ownership of remote root: %w", err)
+				}
 				if _, err := ca.Exec(cmd.Context(), svc.Build, nil); err != nil {
 					return fmt.Errorf("building service: %w", err)
 				}
@@ -151,6 +155,9 @@ func newServiceRestartCmd() *cobra.Command {
 			// Rebuild if configured
 			if svc.Build != "" {
 				Header(fmt.Sprintf("Building %s", styleDetail.Render(svcName)))
+				if err := ensureRemoteWritable(cmd.Context(), ca); err != nil {
+					return fmt.Errorf("claiming ownership of remote root: %w", err)
+				}
 				if _, err := ca.Exec(cmd.Context(), svc.Build, nil); err != nil {
 					return fmt.Errorf("building service: %w", err)
 				}
@@ -401,6 +408,22 @@ func newServiceListCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// ensureRemoteWritable reassigns ownership of the remote root to the current
+// SSH user before operations that write into it (builds, caches, logs).
+// Handles the multi-actor permission case: CI provisions as one OS Login UID,
+// a human deploys as another, and pnpm/turbo try to chmod files they don't
+// own. No-op when the ComputeAccess isn't SSH-backed.
+//
+// Short-term workaround until the shared-service-user design lands — see
+// infrastructure/preview discussion.
+func ensureRemoteWritable(ctx context.Context, ca domain.ComputeAccess) error {
+	sshCA, ok := ca.(*domain.DomainSSHComputeAccess)
+	if !ok {
+		return nil
+	}
+	return sshCA.EnsureRootWritable(ctx)
 }
 
 // resolveRemoteEnv validates remote mode, loads the environment and config,
