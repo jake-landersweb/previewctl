@@ -66,7 +66,7 @@ func newStatusCmd() *cobra.Command {
 					var url string
 					if proxyDomain != "" {
 						host := fmt.Sprintf("%s--%s.%s", e.Name, name, proxyDomain)
-						url = fmt.Sprintf("[%s](https://%s)", host, host)
+						url = fmt.Sprintf("[%s Preview](https://%s)", name, host)
 					} else {
 						url = fmt.Sprintf("http://localhost:%d", e.Ports[name])
 					}
