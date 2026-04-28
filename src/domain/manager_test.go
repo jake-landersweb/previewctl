@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -977,5 +978,69 @@ func TestManager_Init_RecordsStepsAndRunning(t *testing.T) {
 	}
 	if !saved.StepCompleted("start_infra") {
 		t.Error("expected start_infra step")
+	}
+}
+
+func TestGenerateStepContent_BuildServices_GlobalBuild(t *testing.T) {
+	mgr := &Manager{
+		config: &ProjectConfig{
+			Name: "myproject",
+			Runner: &RunnerConfig{
+				Build: "pnpm turbo build",
+				Compose: &ComposeConfig{
+					Autostart: []string{"web"},
+				},
+			},
+			Services: map[string]ServiceConfig{
+				"web": {Path: "apps/web", Build: "pnpm turbo build --filter=web"},
+			},
+		},
+	}
+	entry := &EnvironmentEntry{EnabledServices: []string{"web"}}
+	manifest := &Manifest{}
+
+	out, err := mgr.generateStepContent(manifest, entry, "build_services")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := out[0]
+	if !strings.Contains(got, "Would run global build:") {
+		t.Errorf("expected global-build header, got: %s", got)
+	}
+	if !strings.Contains(got, "pnpm turbo build\n") {
+		t.Errorf("expected global build command, got: %s", got)
+	}
+	if strings.Contains(got, "--filter=web") {
+		t.Errorf("expected per-service builds suppressed when global build set, got: %s", got)
+	}
+}
+
+func TestGenerateStepContent_BuildServices_PerServiceFallback(t *testing.T) {
+	mgr := &Manager{
+		config: &ProjectConfig{
+			Name: "myproject",
+			Runner: &RunnerConfig{
+				Compose: &ComposeConfig{
+					Autostart: []string{"web"},
+				},
+			},
+			Services: map[string]ServiceConfig{
+				"web": {Path: "apps/web", Build: "pnpm turbo build --filter=web"},
+			},
+		},
+	}
+	entry := &EnvironmentEntry{EnabledServices: []string{"web"}}
+	manifest := &Manifest{}
+
+	out, err := mgr.generateStepContent(manifest, entry, "build_services")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := out[0]
+	if !strings.Contains(got, "Would build:") {
+		t.Errorf("expected per-service header, got: %s", got)
+	}
+	if !strings.Contains(got, "web: pnpm turbo build --filter=web") {
+		t.Errorf("expected per-service entry, got: %s", got)
 	}
 }

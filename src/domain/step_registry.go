@@ -285,6 +285,16 @@ func (r *stepRegistry) buildServices(ctx context.Context) StepOpts {
 				return nil
 			}
 			r.m.progress.OnStep(StepEvent{Step: "build_services", Status: StepStreaming})
+
+			// Global build hook replaces the per-service loop when set.
+			if cfg.Runner.Build != "" {
+				stderr := r.m.progress.StderrWriter()
+				_, _ = fmt.Fprintf(stderr, "    Running global build: %s\n", cfg.Runner.Build)
+				env := r.m.buildHookEnv(r.envName, r.ca.Root(), r.manifest.Ports, r.entry.Env)
+				_, err := r.ca.VerboseExec(ctx, cfg.Runner.Build, env)
+				return err
+			}
+
 			services := r.enabledServices()
 			var cmds []string
 			var names []string
