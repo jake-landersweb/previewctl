@@ -72,7 +72,12 @@ type SSHConfig struct {
 
 // RunnerConfig holds runner lifecycle hooks.
 type RunnerConfig struct {
-	Before  string         `yaml:"before,omitempty"`
+	Before string `yaml:"before,omitempty"`
+	// Build, when set, runs once during build_services in place of the
+	// per-service Build loop. Intended for monorepo tools (turborepo, nx,
+	// lerna) where one bulk command builds everything more efficiently
+	// than N filtered invocations.
+	Build   string         `yaml:"build,omitempty"`
 	Deploy  string         `yaml:"deploy,omitempty"`
 	Destroy string         `yaml:"destroy,omitempty"`
 	After   string         `yaml:"after,omitempty"`
@@ -339,6 +344,9 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 		} else {
 			if overlay.Runner.Before != "" {
 				base.Runner.Before = overlay.Runner.Before
+			}
+			if overlay.Runner.Build != "" {
+				base.Runner.Build = overlay.Runner.Build
 			}
 			if overlay.Runner.Deploy != "" {
 				base.Runner.Deploy = overlay.Runner.Deploy

@@ -122,6 +122,47 @@ provisioner:
 	}
 }
 
+func TestLoadConfigWithOverlay_OverlayRunnerBuildOverridesBase(t *testing.T) {
+	dir := t.TempDir()
+
+	base := `
+version: 1
+name: myproject
+provisioner:
+  services:
+    postgres:
+      outputs: [DSN]
+runner:
+  before: ./scripts/base-before.sh
+  build: pnpm turbo build --filter=base
+services:
+  backend:
+    path: apps/backend
+`
+	overlay := `
+runner:
+  build: pnpm turbo build
+`
+	_ = os.WriteFile(filepath.Join(dir, "previewctl.yaml"), []byte(base), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "previewctl.local.yaml"), []byte(overlay), 0o644)
+
+	cfg, err := LoadConfigWithOverlay(filepath.Join(dir, "previewctl.yaml"), "local")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Runner == nil {
+		t.Fatal("expected runner config")
+	}
+	if cfg.Runner.Build != "pnpm turbo build" {
+		t.Errorf("expected overlay build to override base, got '%s'", cfg.Runner.Build)
+	}
+	// Sibling fields not in overlay must be preserved.
+	if cfg.Runner.Before != "./scripts/base-before.sh" {
+		t.Errorf("expected base before preserved, got '%s'", cfg.Runner.Before)
+	}
+}
+
 func TestLoadConfigWithOverlay_OverlayAddsNewService(t *testing.T) {
 	dir := t.TempDir()
 

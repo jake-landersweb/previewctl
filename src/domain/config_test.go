@@ -119,6 +119,28 @@ services:
 	}
 }
 
+func TestParseConfig_RunnerBuild(t *testing.T) {
+	yaml := []byte(`
+version: 1
+name: myproject
+runner:
+  build: pnpm turbo build
+services:
+  backend:
+    path: apps/backend
+`)
+	cfg, err := ParseConfig(yaml)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Runner == nil {
+		t.Fatal("expected runner config")
+	}
+	if cfg.Runner.Build != "pnpm turbo build" {
+		t.Errorf("expected runner.build 'pnpm turbo build', got '%s'", cfg.Runner.Build)
+	}
+}
+
 func TestParseConfig_NoCoreServices(t *testing.T) {
 	yaml := []byte(`
 version: 1

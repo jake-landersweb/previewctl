@@ -648,11 +648,16 @@ func (m *Manager) generateStepContent(manifest *Manifest, entry *EnvironmentEntr
 		return nil, nil // handled specially by callers
 
 	case "build_services":
+		var out strings.Builder
+		if m.config.Runner != nil && m.config.Runner.Build != "" {
+			fmt.Fprintln(&out, "Would run global build:")
+			fmt.Fprintf(&out, "  %s\n", m.config.Runner.Build)
+			return []string{out.String()}, nil
+		}
 		services := entry.EnabledServices
 		if len(services) == 0 && m.config.Runner != nil && m.config.Runner.Compose != nil {
 			services = m.config.Runner.Compose.Autostart
 		}
-		var out strings.Builder
 		fmt.Fprintln(&out, "Would build:")
 		for _, svcName := range services {
 			svc, ok := m.config.Services[svcName]
