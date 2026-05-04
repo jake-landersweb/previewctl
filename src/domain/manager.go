@@ -1581,7 +1581,7 @@ func (l *DomainLocalComputeAccess) VerboseExec(ctx context.Context, command stri
 func (l *DomainLocalComputeAccess) execInternal(ctx context.Context, command string, env []string, teeStdout bool) (string, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = l.root
-	cmd.Env = env
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stderr = l.stderr
 	var stdout bytes.Buffer
 	if teeStdout {

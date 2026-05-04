@@ -180,6 +180,7 @@ func (r *stepRegistry) startInfra(ctx context.Context) StepOpts {
 			if composeFile == "" {
 				return nil
 			}
+			r.m.progress.OnStep(StepEvent{Step: "start_infra", Status: StepStreaming, Message: "Starting infrastructure containers..."})
 			env := BuildComposeEnv(cfg.Name, r.envName, manifest.Ports)
 			cmd := fmt.Sprintf("docker compose -f %s up -d", composeFile)
 			_, err := r.ca.VerboseExec(ctx, cmd, env)

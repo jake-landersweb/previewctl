@@ -38,7 +38,7 @@ func (l *LocalComputeAccess) ReadFile(_ context.Context, relPath string) ([]byte
 func (l *LocalComputeAccess) Exec(ctx context.Context, command string, env []string) (string, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = l.root
-	cmd.Env = env
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stderr = l.stderr
 
 	var stdout bytes.Buffer
