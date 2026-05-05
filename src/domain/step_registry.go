@@ -62,8 +62,9 @@ func (r *stepRegistry) syncCode(ctx context.Context) StepOpts {
 		StartMsg:    fmt.Sprintf("Syncing code to origin/%s...", branch),
 		CompleteMsg: msg("Code synced to latest"),
 		Fn: func() error {
-			// Skip in local mode — user manages their own code
-			if r.m.config.Mode == "local" {
+			// Skip in local mode — user manages their own code. Empty mode
+			// defaults to local elsewhere (manifest build), so treat it the same.
+			if r.m.config.Mode == "" || r.m.config.Mode == "local" {
 				return nil
 			}
 			syncCmd := fmt.Sprintf("git fetch --depth 1 origin %s && git reset --hard origin/%s", branch, branch)

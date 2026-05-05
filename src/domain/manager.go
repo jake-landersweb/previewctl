@@ -1094,20 +1094,24 @@ func (m *Manager) runRunner(ctx context.Context, envName, branch string, ca Comp
 	// Use the step registry for all runner steps
 	reg := newStepRegistry(m, entry, ca, manifest, envName, branch)
 
-	// 0. Sync code on re-runs (pull latest from remote)
-	if entry != nil && entry.StepCompleted("runner_before") {
-		syncOpts := reg.syncCode(ctx)
-		m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepStarted, Message: syncOpts.StartMsg})
-		if err := syncOpts.Fn(); err != nil {
-			m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepFailed, Error: err})
-			return nil, fmt.Errorf("syncing code: %w", err)
-		}
-		m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepCompleted, Message: *syncOpts.CompleteMsg})
+	// 0. Always sync source first. Bypasses checkpointing intentionally: a
+	// stale tree must never silently survive a retry. A previous attempt may
+	// have failed before runner_before completed (e.g., the branch lacked the
+	// hook script until main was merged in), in which case the VM still holds
+	// the original clone and re-running runner.before against it just repeats
+	// the same failure. No-op in local mode.
+	syncOpts := reg.syncCode(ctx)
+	m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepStarted, Message: syncOpts.StartMsg})
+	if err := syncOpts.Fn(); err != nil {
+		m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepFailed, Error: err})
+		return nil, fmt.Errorf("syncing code: %w", err)
+	}
+	m.progress.OnStep(StepEvent{Step: syncOpts.Name, Status: StepCompleted, Message: *syncOpts.CompleteMsg})
 
-		// Code changed — invalidate runner_before so VM-side setup scripts
-		// (dep install, perms fixes, system config) re-run against the freshly
-		// synced code, and invalidate build/restart so services pick up the
-		// new outputs.
+	// Source may have moved — invalidate downstream steps that read from it
+	// so they re-run against the fresh tree. InvalidateStep is a no-op for
+	// steps that haven't completed yet, so this is safe on first run too.
+	if entry != nil {
 		for _, step := range []string{"runner_before", "build_services", "start_services"} {
 			entry.InvalidateStep(step, "code synced, rebuild required")
 		}
