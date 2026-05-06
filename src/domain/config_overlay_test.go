@@ -154,12 +154,80 @@ runner:
 	if cfg.Runner == nil {
 		t.Fatal("expected runner config")
 	}
-	if cfg.Runner.Build != "pnpm turbo build" {
-		t.Errorf("expected overlay build to override base, got '%s'", cfg.Runner.Build)
+	if cfg.Runner.Build.Command != "pnpm turbo build" {
+		t.Errorf("expected overlay build to override base, got '%s'", cfg.Runner.Build.Command)
 	}
 	// Sibling fields not in overlay must be preserved.
-	if cfg.Runner.Before != "./scripts/base-before.sh" {
-		t.Errorf("expected base before preserved, got '%s'", cfg.Runner.Before)
+	if cfg.Runner.Before.Command != "./scripts/base-before.sh" {
+		t.Errorf("expected base before preserved, got '%s'", cfg.Runner.Before.Command)
+	}
+}
+
+func TestLoadConfigWithOverlay_OverlayRunnerHookObject(t *testing.T) {
+	dir := t.TempDir()
+
+	base := `
+version: 1
+name: myproject
+runner:
+  after: ./scripts/base-after.sh
+services:
+  backend:
+    path: apps/backend
+`
+	overlay := `
+runner:
+  after:
+    command: ./scripts/remote-after.sh
+    allow_cache: false
+`
+	_ = os.WriteFile(filepath.Join(dir, "previewctl.yaml"), []byte(base), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "previewctl.remote.yaml"), []byte(overlay), 0o644)
+
+	cfg, err := LoadConfigWithOverlay(filepath.Join(dir, "previewctl.yaml"), "remote")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Runner.After.Command != "./scripts/remote-after.sh" {
+		t.Errorf("expected overlay after command, got '%s'", cfg.Runner.After.Command)
+	}
+	if cfg.Runner.After.AllowCache == nil {
+		t.Fatal("expected overlay allow_cache to be parsed")
+	}
+	if cfg.Runner.After.CacheAllowed() {
+		t.Error("expected overlay allow_cache=false to disable cache")
+	}
+}
+
+func TestLoadConfigWithOverlay_OverlayRunnerHookCachePolicyOnly(t *testing.T) {
+	dir := t.TempDir()
+
+	base := `
+version: 1
+name: myproject
+runner:
+  after: ./scripts/base-after.sh
+services:
+  backend:
+    path: apps/backend
+`
+	overlay := `
+runner:
+  after:
+    allow_cache: false
+`
+	_ = os.WriteFile(filepath.Join(dir, "previewctl.yaml"), []byte(base), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "previewctl.remote.yaml"), []byte(overlay), 0o644)
+
+	cfg, err := LoadConfigWithOverlay(filepath.Join(dir, "previewctl.yaml"), "remote")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Runner.After.Command != "./scripts/base-after.sh" {
+		t.Errorf("expected base after command preserved, got '%s'", cfg.Runner.After.Command)
+	}
+	if cfg.Runner.After.CacheAllowed() {
+		t.Error("expected overlay allow_cache=false to disable cache")
 	}
 }
 

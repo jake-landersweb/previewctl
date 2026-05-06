@@ -223,8 +223,8 @@ func TestDeepMergeConfig_ComposeConfig(t *testing.T) {
 		Version: 1,
 		Name:    "test",
 		Runner: &RunnerConfig{
-			Before: "./setup.sh",
-			After:  "./migrate.sh",
+			Before: CommandHook{Command: "./setup.sh"},
+			After:  CommandHook{Command: "./migrate.sh"},
 		},
 	}
 
@@ -241,10 +241,10 @@ func TestDeepMergeConfig_ComposeConfig(t *testing.T) {
 	deepMergeConfig(base, overlay)
 
 	// Runner hooks should be preserved
-	if base.Runner.Before != "./setup.sh" {
+	if base.Runner.Before.Command != "./setup.sh" {
 		t.Error("expected runner.before preserved")
 	}
-	if base.Runner.After != "./migrate.sh" {
+	if base.Runner.After.Command != "./migrate.sh" {
 		t.Error("expected runner.after preserved")
 	}
 

@@ -109,7 +109,7 @@ func (r *stepRegistry) generateManifest(ctx context.Context) StepOpts {
 
 func (r *stepRegistry) runnerBefore(ctx context.Context) StepOpts {
 	cfg := r.m.config
-	if cfg.Runner == nil || cfg.Runner.Before == "" {
+	if cfg.Runner == nil || !cfg.Runner.Before.IsConfigured() {
 		return StepOpts{
 			Name:        "runner_before",
 			StartMsg:    "runner.before (not configured)",
@@ -117,15 +117,17 @@ func (r *stepRegistry) runnerBefore(ctx context.Context) StepOpts {
 			Fn:          func() error { return nil },
 		}
 	}
-	beforeMsg := fmt.Sprintf("Ran runner.before (%s)", cfg.Runner.Before)
+	hook := cfg.Runner.Before
+	beforeMsg := fmt.Sprintf("Ran runner.before (%s)", hook.Command)
 	return StepOpts{
 		Name:        "runner_before",
-		StartMsg:    fmt.Sprintf("Running runner.before → %s", cfg.Runner.Before),
+		StartMsg:    fmt.Sprintf("Running runner.before → %s", hook.Command),
 		CompleteMsg: &beforeMsg,
+		AllowCache:  hook.AllowCache,
 		Fn: func() error {
-			r.m.progress.OnStep(StepEvent{Step: "runner_before", Status: StepStreaming, Message: fmt.Sprintf("Running runner.before → %s", cfg.Runner.Before)})
+			r.m.progress.OnStep(StepEvent{Step: "runner_before", Status: StepStreaming, Message: fmt.Sprintf("Running runner.before → %s", hook.Command)})
 			env := r.m.buildHookEnv(r.envName, r.ca.Root(), r.manifest.Ports, r.entry.Env)
-			_, err := r.ca.VerboseExec(ctx, cfg.Runner.Before, env)
+			_, err := r.ca.VerboseExec(ctx, hook.Command, env)
 			return err
 		},
 	}
@@ -278,10 +280,15 @@ func (r *stepRegistry) generateNginx(ctx context.Context) StepOpts {
 
 func (r *stepRegistry) buildServices(ctx context.Context) StepOpts {
 	cfg := r.m.config
+	var allowCache *bool
+	if cfg.Runner != nil && cfg.Runner.Build.IsConfigured() {
+		allowCache = cfg.Runner.Build.AllowCache
+	}
 	return StepOpts{
 		Name:        "build_services",
 		StartMsg:    "Building services...",
 		CompleteMsg: msg("Services built"),
+		AllowCache:  allowCache,
 		Fn: func() error {
 			if cfg.Runner == nil || cfg.Runner.Compose == nil {
 				return nil
@@ -289,11 +296,11 @@ func (r *stepRegistry) buildServices(ctx context.Context) StepOpts {
 			r.m.progress.OnStep(StepEvent{Step: "build_services", Status: StepStreaming})
 
 			// Global build hook replaces the per-service loop when set.
-			if cfg.Runner.Build != "" {
+			if cfg.Runner.Build.IsConfigured() {
 				stderr := r.m.progress.StderrWriter()
-				_, _ = fmt.Fprintf(stderr, "    Running global build: %s\n", cfg.Runner.Build)
+				_, _ = fmt.Fprintf(stderr, "    Running global build: %s\n", cfg.Runner.Build.Command)
 				env := r.m.buildHookEnv(r.envName, r.ca.Root(), r.manifest.Ports, r.entry.Env)
-				_, err := r.ca.VerboseExec(ctx, cfg.Runner.Build, env)
+				_, err := r.ca.VerboseExec(ctx, cfg.Runner.Build.Command, env)
 				return err
 			}
 
@@ -380,7 +387,7 @@ func (r *stepRegistry) enabledServices() []string {
 
 func (r *stepRegistry) runnerDeploy(ctx context.Context) StepOpts {
 	cfg := r.m.config
-	if cfg.Runner == nil || cfg.Runner.Deploy == "" {
+	if cfg.Runner == nil || !cfg.Runner.Deploy.IsConfigured() {
 		return StepOpts{
 			Name:        "runner_deploy",
 			StartMsg:    "runner.deploy (not configured)",
@@ -388,15 +395,17 @@ func (r *stepRegistry) runnerDeploy(ctx context.Context) StepOpts {
 			Fn:          func() error { return nil },
 		}
 	}
-	deployMsg := fmt.Sprintf("Ran runner.deploy (%s)", cfg.Runner.Deploy)
+	hook := cfg.Runner.Deploy
+	deployMsg := fmt.Sprintf("Ran runner.deploy (%s)", hook.Command)
 	return StepOpts{
 		Name:        "runner_deploy",
-		StartMsg:    fmt.Sprintf("Running runner.deploy → %s", cfg.Runner.Deploy),
+		StartMsg:    fmt.Sprintf("Running runner.deploy → %s", hook.Command),
 		CompleteMsg: &deployMsg,
+		AllowCache:  hook.AllowCache,
 		Fn: func() error {
-			r.m.progress.OnStep(StepEvent{Step: "runner_deploy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.deploy → %s", cfg.Runner.Deploy)})
+			r.m.progress.OnStep(StepEvent{Step: "runner_deploy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.deploy → %s", hook.Command)})
 			env := r.m.buildHookEnv(r.envName, r.ca.Root(), r.manifest.Ports, r.entry.Env)
-			_, err := r.ca.VerboseExec(ctx, cfg.Runner.Deploy, env)
+			_, err := r.ca.VerboseExec(ctx, hook.Command, env)
 			return err
 		},
 	}
@@ -404,7 +413,7 @@ func (r *stepRegistry) runnerDeploy(ctx context.Context) StepOpts {
 
 func (r *stepRegistry) runnerAfter(ctx context.Context) StepOpts {
 	cfg := r.m.config
-	if cfg.Runner == nil || cfg.Runner.After == "" {
+	if cfg.Runner == nil || !cfg.Runner.After.IsConfigured() {
 		return StepOpts{
 			Name:        "runner_after",
 			StartMsg:    "runner.after (not configured)",
@@ -412,15 +421,17 @@ func (r *stepRegistry) runnerAfter(ctx context.Context) StepOpts {
 			Fn:          func() error { return nil },
 		}
 	}
-	afterMsg := fmt.Sprintf("Ran runner.after (%s)", cfg.Runner.After)
+	hook := cfg.Runner.After
+	afterMsg := fmt.Sprintf("Ran runner.after (%s)", hook.Command)
 	return StepOpts{
 		Name:        "runner_after",
-		StartMsg:    fmt.Sprintf("Running runner.after → %s", cfg.Runner.After),
+		StartMsg:    fmt.Sprintf("Running runner.after → %s", hook.Command),
 		CompleteMsg: &afterMsg,
+		AllowCache:  hook.AllowCache,
 		Fn: func() error {
-			r.m.progress.OnStep(StepEvent{Step: "runner_after", Status: StepStreaming, Message: fmt.Sprintf("Running runner.after → %s", cfg.Runner.After)})
+			r.m.progress.OnStep(StepEvent{Step: "runner_after", Status: StepStreaming, Message: fmt.Sprintf("Running runner.after → %s", hook.Command)})
 			env := r.m.buildHookEnv(r.envName, r.ca.Root(), r.manifest.Ports, r.entry.Env)
-			_, err := r.ca.VerboseExec(ctx, cfg.Runner.After, env)
+			_, err := r.ca.VerboseExec(ctx, hook.Command, env)
 			return err
 		},
 	}

@@ -136,8 +136,41 @@ services:
 	if cfg.Runner == nil {
 		t.Fatal("expected runner config")
 	}
-	if cfg.Runner.Build != "pnpm turbo build" {
-		t.Errorf("expected runner.build 'pnpm turbo build', got '%s'", cfg.Runner.Build)
+	if cfg.Runner.Build.Command != "pnpm turbo build" {
+		t.Errorf("expected runner.build 'pnpm turbo build', got '%s'", cfg.Runner.Build.Command)
+	}
+	if !cfg.Runner.Build.CacheAllowed() {
+		t.Error("expected string runner.build to allow cache by default")
+	}
+}
+
+func TestParseConfig_RunnerHookObject(t *testing.T) {
+	yaml := []byte(`
+version: 1
+name: myproject
+runner:
+  after:
+    command: cd apps/backend && pnpm migration:run
+    allow_cache: false
+services:
+  backend:
+    path: apps/backend
+`)
+	cfg, err := ParseConfig(yaml)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Runner == nil {
+		t.Fatal("expected runner config")
+	}
+	if cfg.Runner.After.Command != "cd apps/backend && pnpm migration:run" {
+		t.Errorf("expected runner.after command, got '%s'", cfg.Runner.After.Command)
+	}
+	if cfg.Runner.After.AllowCache == nil {
+		t.Fatal("expected allow_cache to be parsed")
+	}
+	if cfg.Runner.After.CacheAllowed() {
+		t.Error("expected runner.after allow_cache=false to disable cache")
 	}
 }
 

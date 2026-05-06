@@ -78,6 +78,17 @@ Certain steps have verify functions that check whether their side effects still 
 
 If a verify check fails (e.g., a file was deleted or a container stopped), the step re-executes even though it was previously completed.
 
+Runner hooks are cacheable by default, matching older string hook behavior. Use
+object hook syntax with `allow_cache: false` for hooks that should always run
+when reached, such as database migrations:
+
+```yaml
+runner:
+  after:
+    command: cd apps/backend && pnpm migration:run
+    allow_cache: false
+```
+
 ## Resumability
 
 previewctl provides several mechanisms for controlling re-execution:

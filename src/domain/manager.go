@@ -68,17 +68,22 @@ type StepOpts struct {
 	Fn          func() error
 	Verify      VerifyFunc            // nil = pure, skip on checkpoint alone
 	Outputs     func() map[string]any // capture outputs after success
+	AllowCache  *bool                 // nil = true; false = always execute
 }
 
 // msg is a convenience for creating a string pointer for step().
 func msg(s string) *string { return &s }
+
+func stepCacheAllowed(opts StepOpts) bool {
+	return opts.AllowCache == nil || *opts.AllowCache
+}
 
 // step executes a lifecycle step with checkpoint-aware caching and audit logging.
 // When entry is non-nil, completed steps are skipped (unless noCache is set) and
 // results are persisted after each step.
 func (m *Manager) step(ctx context.Context, entry *EnvironmentEntry, opts StepOpts) error {
 	// Check for existing checkpoint
-	if !m.noCache && entry != nil && entry.StepCompleted(opts.Name) {
+	if stepCacheAllowed(opts) && !m.noCache && entry != nil && entry.StepCompleted(opts.Name) {
 		if opts.Verify != nil {
 			// Stateful step: verify side effects still exist
 			if err := opts.Verify(ctx); err != nil {
@@ -649,9 +654,9 @@ func (m *Manager) generateStepContent(manifest *Manifest, entry *EnvironmentEntr
 
 	case "build_services":
 		var out strings.Builder
-		if m.config.Runner != nil && m.config.Runner.Build != "" {
+		if m.config.Runner != nil && m.config.Runner.Build.IsConfigured() {
 			fmt.Fprintln(&out, "Would run global build:")
-			fmt.Fprintf(&out, "  %s\n", m.config.Runner.Build)
+			fmt.Fprintf(&out, "  %s\n", m.config.Runner.Build.Command)
 			return []string{out.String()}, nil
 		}
 		services := entry.EnabledServices
@@ -1216,15 +1221,16 @@ func (m *Manager) Destroy(ctx context.Context, envName string) error {
 	}
 
 	// runner.destroy hook
-	if m.config.Runner != nil && m.config.Runner.Destroy != "" && ca != nil {
-		destroyMsg := fmt.Sprintf("Ran runner.destroy (%s)", m.config.Runner.Destroy)
+	if m.config.Runner != nil && m.config.Runner.Destroy.IsConfigured() && ca != nil {
+		hook := m.config.Runner.Destroy
+		destroyMsg := fmt.Sprintf("Ran runner.destroy (%s)", hook.Command)
 		if err := m.stepSimple(ctx, "runner_destroy",
-			fmt.Sprintf("Running runner.destroy → %s", m.config.Runner.Destroy),
+			fmt.Sprintf("Running runner.destroy → %s", hook.Command),
 			&destroyMsg,
 			func() error {
-				m.progress.OnStep(StepEvent{Step: "runner_destroy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.destroy → %s", m.config.Runner.Destroy)})
+				m.progress.OnStep(StepEvent{Step: "runner_destroy", Status: StepStreaming, Message: fmt.Sprintf("Running runner.destroy → %s", hook.Command)})
 				env := m.buildHookEnv(envName, ca.Root(), entry.Ports, entry.Env)
-				_, err := ca.VerboseExec(ctx, m.config.Runner.Destroy, env)
+				_, err := ca.VerboseExec(ctx, hook.Command, env)
 				return err
 			}); err != nil {
 			return fmt.Errorf("runner destroy hook: %w", err)

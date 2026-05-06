@@ -72,16 +72,71 @@ type SSHConfig struct {
 
 // RunnerConfig holds runner lifecycle hooks.
 type RunnerConfig struct {
-	Before string `yaml:"before,omitempty"`
+	Before CommandHook `yaml:"before,omitempty"`
 	// Build, when set, runs once during build_services in place of the
 	// per-service Build loop. Intended for monorepo tools (turborepo, nx,
 	// lerna) where one bulk command builds everything more efficiently
 	// than N filtered invocations.
-	Build   string         `yaml:"build,omitempty"`
-	Deploy  string         `yaml:"deploy,omitempty"`
-	Destroy string         `yaml:"destroy,omitempty"`
-	After   string         `yaml:"after,omitempty"`
+	Build   CommandHook    `yaml:"build,omitempty"`
+	Deploy  CommandHook    `yaml:"deploy,omitempty"`
+	Destroy CommandHook    `yaml:"destroy,omitempty"`
+	After   CommandHook    `yaml:"after,omitempty"`
 	Compose *ComposeConfig `yaml:"compose,omitempty"`
+}
+
+// CommandHook is a command-valued hook that can be configured either as a
+// legacy scalar string or as an object with hook metadata.
+type CommandHook struct {
+	Command    string `yaml:"command,omitempty"`
+	AllowCache *bool  `yaml:"allow_cache,omitempty"`
+}
+
+// UnmarshalYAML accepts both:
+//
+//	runner:
+//	  after: ./script.sh
+//
+// and:
+//
+//	runner:
+//	  after:
+//	    command: ./script.sh
+//	    allow_cache: false
+func (h *CommandHook) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		if value.Tag == "!!null" {
+			*h = CommandHook{}
+			return nil
+		}
+		h.Command = value.Value
+		h.AllowCache = nil
+		return nil
+	case yaml.MappingNode:
+		var raw struct {
+			Command    string `yaml:"command"`
+			AllowCache *bool  `yaml:"allow_cache"`
+		}
+		if err := value.Decode(&raw); err != nil {
+			return err
+		}
+		h.Command = raw.Command
+		h.AllowCache = raw.AllowCache
+		return nil
+	default:
+		return fmt.Errorf("hook must be a string or object")
+	}
+}
+
+// IsConfigured reports whether this hook has a command to run.
+func (h CommandHook) IsConfigured() bool {
+	return h.Command != ""
+}
+
+// CacheAllowed reports whether completed checkpoints may skip this hook.
+// Hooks are cacheable by default for backward compatibility.
+func (h CommandHook) CacheAllowed() bool {
+	return h.AllowCache == nil || *h.AllowCache
 }
 
 // ComposeConfig defines how previewctl generates and manages Docker Compose
@@ -342,25 +397,24 @@ func deepMergeConfig(base, overlay *ProjectConfig) {
 		if base.Runner == nil {
 			base.Runner = overlay.Runner
 		} else {
-			if overlay.Runner.Before != "" {
-				base.Runner.Before = overlay.Runner.Before
-			}
-			if overlay.Runner.Build != "" {
-				base.Runner.Build = overlay.Runner.Build
-			}
-			if overlay.Runner.Deploy != "" {
-				base.Runner.Deploy = overlay.Runner.Deploy
-			}
-			if overlay.Runner.After != "" {
-				base.Runner.After = overlay.Runner.After
-			}
-			if overlay.Runner.Destroy != "" {
-				base.Runner.Destroy = overlay.Runner.Destroy
-			}
+			mergeCommandHook(&base.Runner.Before, overlay.Runner.Before)
+			mergeCommandHook(&base.Runner.Build, overlay.Runner.Build)
+			mergeCommandHook(&base.Runner.Deploy, overlay.Runner.Deploy)
+			mergeCommandHook(&base.Runner.After, overlay.Runner.After)
+			mergeCommandHook(&base.Runner.Destroy, overlay.Runner.Destroy)
 			if overlay.Runner.Compose != nil {
 				base.Runner.Compose = overlay.Runner.Compose
 			}
 		}
+	}
+}
+
+func mergeCommandHook(base *CommandHook, overlay CommandHook) {
+	if overlay.Command != "" {
+		base.Command = overlay.Command
+	}
+	if overlay.AllowCache != nil {
+		base.AllowCache = overlay.AllowCache
 	}
 }
 

@@ -919,6 +919,74 @@ func TestManager_StepRecord_Outputs(t *testing.T) {
 	}
 }
 
+func TestManager_Step_CachedByDefault(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+	entry := &EnvironmentEntry{
+		Name: "feat-cache",
+		Steps: map[string]*StepRecord{
+			"runner_after": {Name: "runner_after", Status: StepRecordCompleted},
+		},
+	}
+	statePort.environments[entry.Name] = entry
+
+	ran := 0
+	err := mgr.step(ctx, entry, StepOpts{
+		Name:        "runner_after",
+		StartMsg:    "Running runner.after",
+		CompleteMsg: msg("Ran runner.after"),
+		Fn: func() error {
+			ran++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ran != 0 {
+		t.Fatalf("expected cached step not to run, ran %d times", ran)
+	}
+	if got := entry.AuditLog[len(entry.AuditLog)-1].Action; got != "skipped" {
+		t.Fatalf("expected skipped audit action, got %q", got)
+	}
+}
+
+func TestManager_Step_AllowCacheFalseRerunsCompletedStep(t *testing.T) {
+	tracker := &mockTracker{}
+	mgr, statePort, _ := newTestManager(tracker)
+	ctx := context.Background()
+	entry := &EnvironmentEntry{
+		Name: "feat-no-hook-cache",
+		Steps: map[string]*StepRecord{
+			"runner_after": {Name: "runner_after", Status: StepRecordCompleted},
+		},
+	}
+	statePort.environments[entry.Name] = entry
+
+	allowCache := false
+	ran := 0
+	err := mgr.step(ctx, entry, StepOpts{
+		Name:        "runner_after",
+		StartMsg:    "Running runner.after",
+		CompleteMsg: msg("Ran runner.after"),
+		AllowCache:  &allowCache,
+		Fn: func() error {
+			ran++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ran != 1 {
+		t.Fatalf("expected non-cacheable step to run once, ran %d times", ran)
+	}
+	if got := entry.AuditLog[len(entry.AuditLog)-1].Action; got != "executed" {
+		t.Fatalf("expected executed audit action, got %q", got)
+	}
+}
+
 func TestEnvironmentEntry_InvalidateStepsFrom(t *testing.T) {
 	entry := &EnvironmentEntry{
 		Steps: map[string]*StepRecord{
@@ -986,7 +1054,7 @@ func TestGenerateStepContent_BuildServices_GlobalBuild(t *testing.T) {
 		config: &ProjectConfig{
 			Name: "myproject",
 			Runner: &RunnerConfig{
-				Build: "pnpm turbo build",
+				Build: CommandHook{Command: "pnpm turbo build"},
 				Compose: &ComposeConfig{
 					Autostart: []string{"web"},
 				},

@@ -139,6 +139,19 @@ Defined per service under `provisioner.services.<name>`:
 | `runner.after` | `runner.after` | End of the runner phase |
 | `runner.destroy` | `runner.destroy` | During environment destruction |
 
+Runner hooks can be configured as plain strings or as objects:
+
+```yaml
+runner:
+  after:
+    command: cd apps/backend && pnpm migration:run
+    allow_cache: false
+```
+
+`allow_cache` defaults to `true` for backward compatibility. Set it to `false`
+when a hook must run every time its step is reached, even if previewctl has a
+completed checkpoint for that step.
+
 ## Patterns
 
 ### Make hooks idempotent

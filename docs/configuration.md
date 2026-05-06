@@ -133,7 +133,9 @@ runner:
   before: preview/hooks/runner-before.sh
   deploy: preview/hooks/deploy.sh
   destroy: preview/hooks/runner-destroy.sh
-  after: preview/hooks/runner-after.sh
+  after:
+    command: preview/hooks/runner-after.sh
+    allow_cache: false
 
   compose:
     autostart:
@@ -148,10 +150,13 @@ runner:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `runner.before` | string | — | Hook run before the runner phase starts. |
-| `runner.deploy` | string | — | Hook run to deploy the environment. |
-| `runner.destroy` | string | — | Hook run to tear down runner resources. |
-| `runner.after` | string | — | Hook run after the runner phase completes. |
+| `runner.before` | string or hook object | — | Hook run before the runner phase starts. |
+| `runner.build` | string or hook object | — | Global build hook run during `build_services` instead of per-service builds. |
+| `runner.deploy` | string or hook object | — | Hook run to deploy the environment. |
+| `runner.destroy` | string or hook object | — | Hook run to tear down runner resources. |
+| `runner.after` | string or hook object | — | Hook run after the runner phase completes. |
+| `runner.<hook>.command` | string | — | Command to execute when using object hook syntax. |
+| `runner.<hook>.allow_cache` | bool | `true` | Whether a completed runner step checkpoint may skip this hook on later runs. Applies to `before`, `build`, `deploy`, and `after`; set `false` for hooks such as migrations that must run after each deployment. |
 | `runner.compose.autostart` | []string | — | Service names started automatically on create. The proxy service is always implicit when enabled. |
 | `runner.compose.image` | string | **required** | Base Docker image for application containers (e.g., `node:20`). |
 | `runner.compose.proxy.enabled` | bool | `true` | Whether to generate and start a reverse proxy. |

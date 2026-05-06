@@ -238,6 +238,16 @@ Core services manage external resources (databases, branches, etc.) via lifecycl
 | `after` | End of runner phase | Run migrations, post PR comment |
 | `destroy` | During `previewctl delete` | Cleanup before teardown |
 
+Runner hooks can be strings or objects. Use `allow_cache: false` for hooks that
+must run every time the step is reached, such as migrations:
+
+```yaml
+runner:
+  after:
+    command: cd apps/database && pnpm migrate:run
+    allow_cache: false
+```
+
 ## How it works
 
 ### Local: `previewctl create`

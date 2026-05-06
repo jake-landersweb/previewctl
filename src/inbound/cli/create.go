@@ -133,8 +133,8 @@ func runCreateDryRun(envName, branch, baseBranch string) error {
 	// Runner steps
 	fmt.Fprintln(os.Stderr)
 	SectionHeader("Runner Phase")
-	if cfg.Runner != nil && cfg.Runner.Before != "" {
-		DetailKeyValue("runner_before", cfg.Runner.Before)
+	if cfg.Runner != nil && cfg.Runner.Before.IsConfigured() {
+		DetailKeyValue("runner_before", cfg.Runner.Before.Command)
 	}
 	DetailKeyValue("generate_env", "generate .env.local files from manifest")
 	if cfg.Infrastructure != nil && cfg.Infrastructure.ComposeFile != "" {
@@ -148,11 +148,11 @@ func runCreateDryRun(envName, branch, baseBranch string) error {
 		DetailKeyValue("build_services", fmt.Sprintf("build %v", cfg.Runner.Compose.Autostart))
 		DetailKeyValue("start_services", fmt.Sprintf("start %v", cfg.Runner.Compose.Autostart))
 	}
-	if cfg.Runner != nil && cfg.Runner.Deploy != "" {
-		DetailKeyValue("runner_deploy", cfg.Runner.Deploy)
+	if cfg.Runner != nil && cfg.Runner.Deploy.IsConfigured() {
+		DetailKeyValue("runner_deploy", cfg.Runner.Deploy.Command)
 	}
-	if cfg.Runner != nil && cfg.Runner.After != "" {
-		DetailKeyValue("runner_after", cfg.Runner.After)
+	if cfg.Runner != nil && cfg.Runner.After.IsConfigured() {
+		DetailKeyValue("runner_after", cfg.Runner.After.Command)
 	}
 
 	// Ports
